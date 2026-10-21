@@ -1,0 +1,93 @@
+=== TITLE ===
+AutoHub - Automatic Inbreeding Check
+
+=== BRIEF OVERVIEW (Nexus "summary", max 350 characters) ===
+Stop inbreeding before it happens. AutoHub finds animals living with a parent, or a brother and sister sharing a habitat, and sends the adults to Animal Storage or puts the young on contraception, with the game's own actions. Works in habitats, aquariums and vivariums. Off by default.
+
+=== DESCRIPTION (paste into the BBCode editor) ===
+[size=5][b]AutoHub[/b][/size]
+[i]Finds related animals living together and sends them to Animal Storage, or puts the young ones on contraception, so your habitats don't inbreed.[/i]
+
+Babies grow up, and before you notice, a daughter is breeding with her father. AutoHub checks your habitats for related animals and moves the adults to Animal Storage for you, using the game's own "Send to Animal Storage". It can also put newborns on contraception while they live with their family. You find it in the game's Esc menu, and a small panel shows what it is doing.
+
+[size=4][b]Habitats, aquariums and vivariums[/b][/size]
+AutoHub works in all three: [b]habitats[/b], [b]aquariums[/b] and [b]vivariums[/b]. Each one has its own switch in the panel ("Look at"), so you can turn off any kind you don't want AutoHub to touch. Auto mode and "Check all" skip the kinds you switched off; "Check the open habitat" always checks the one you have open.
+
+[size=4][b]Who leaves[/b][/size]
+AutoHub uses the game's own rule for related animals: a parent and its child, or two animals with at least one parent in common. In one habitat or vivarium:
+[list]
+[*]An [b]adult living with its mother or father[/b] leaves.
+[*]An [b]adult brother and sister[/b] (half-siblings too) both leave. This rule can be switched off.
+[*][b]Fish shoals[/b]: with 2 or more shoals of the same species in one tank (a shoal that split in two), all but the youngest shoal leave.
+[/list]
+Same-sex siblings stay together. Juveniles and elderly animals are never sent. Cousins don't count, as in the game.
+
+[size=4][b]Auto contraception[/b][/size]
+Switch it on and newborns living with their mother or father of the other sex get contraception right away (with the brother + sister rule on, also when they live with a brother or sister of the other sex). It uses the same toggle as the animal's info panel.
+[list]
+[*][b]On its own[/b] (Auto off): animals stay where they are, they just can't breed with their family.
+[*][b]Together with Auto[/b]: the young are on contraception while they grow up and go to Animal Storage once they are adults.
+[*]Once such an animal lives without those relatives (moved, or placed again from storage), AutoHub takes the contraception off again. It only does that for animals it put on contraception itself.
+[*]If you switch it off by hand, AutoHub leaves it off.
+[/list]
+
+[size=4][b]Features[/b][/size]
+[list]
+[*][b]Check all[/b]: checks every habitat, aquarium and vivarium now.
+[*][b]Check the open habitat[/b]: checks only the one whose info panel is open.
+[*][b]In the Esc menu[/b]: a "Mods" box next to the game's menu opens the panel. The screen button can be switched off.
+[*][b]Auto mode[/b]: Off (default), [i]New adults[/i] (acts when an animal grows up) or [i]Always[/i] (checks everything regularly, also catches shoal splits).
+[*][b]Check every[/b]: how often auto mode checks, 1 s to 5 min of real time (default 5 s).
+[*][b]Look at[/b]: switch habitats, aquariums and vivariums on or off (all on by default).
+[*][b]Auto contraception[/b]: on or off (off by default), with or without Auto mode.
+[*][b]Sent by auto[/b]: a list of what auto mode sent, plus a short notice for each animal.
+[*][b]Diagnose[/b]: shows the age group, sex and parents the game reports for every animal in the open habitat, handy for bug reports.
+[/list]
+The check buttons need two clicks, so nothing is sent by accident.
+
+[size=4][b]Good to know[/b][/size]
+[list]
+[*]Your zoo needs a Trade Centre with free storage space, as for the normal game action.
+[*]AutoHub only moves animals to Animal Storage. It never sells or releases them.
+[*]Vivariums: the game loads family data for vivarium animals in the background. The first check after loading a park may say "family data is still loading"; check again a few seconds later.
+[*]The panel follows the game's UI scale and screen size, and the [b]Size[/b] setting (50-200 %) makes it smaller or bigger.
+[/list]
+
+[size=4][b]Installation[/b][/size]
+[list=1]
+[*]In Steam: right-click Planet Zoo 2 > Manage > Browse local files.
+[*]Copy the [b]Win64[/b] folder from the zip into that game folder and choose "Replace" / merge. Nothing of the game is overwritten; only a new PZ2AutoHub folder is added.
+[*]Check that [i]Planet Zoo 2\Win64\ovldata\PZ2AutoHub\Main.ovl[/i] exists.
+[*]Start the game. The one-time "modifications detected" notice is normal.
+[/list]
+[b]Uninstall:[/b] delete [i]Planet Zoo 2\Win64\ovldata\PZ2AutoHub[/i].
+[b]Update:[/b] copy the new Win64 folder over the old one.
+
+[size=4][b]Compatibility[/b][/size]
+Works alongside [b]Guardian[/b]: they share the in-park screen and the "Mods" box in the Esc menu. Works alongside [b]Mike's QoL Toolbox[/b]: both share the in-park screen, in any install order. No game files are changed. The only thing written is AutoHub's own small entry in your player profile (its settings); nothing goes into park saves or online saves.
+
+[size=4][b]Changelog[/b][/size]
+[b]1.2.0[/b]
+[list]
+[*]Settings are now saved for good. They were lost every time the game closed, because the game's UI forgets them; they are now kept in your player profile. Set them once more after updating.
+[*]Fixed: Mike's QoL Toolbox and AutoHub could not both run in the park. Depending on the install, the Toolbox's park features or AutoHub's checks did not start. Both now share the in-park screen in any order.
+[*]Diagnose also shows which screen AutoHub runs on and whether the settings were saved.
+[/list]
+[b]1.1.0[/b]
+[list]
+[*]Auto contraception: newborns living with a parent (or sibling) of the other sex get contraception; it comes off again once they live without them. Works with or without Auto mode.
+[*]AutoHub is now in the game's Esc menu ("Mods" box next to Save / Load / Settings).
+[*]The screen button can be hidden ("Screen button" in the panel).
+[*]Smaller default size: the new 100 % is the old 70 % (range 50-200 %). A size you set before is kept as it looked.
+[*]The button and panel now use the game's green UI colours, so they blend in with the game's bars and menus.
+[/list]
+[b]1.0.1[/b]
+[list]
+[*]New Size setting in the panel (50-150 %): makes the panel, button and notices smaller or bigger, on top of the automatic scaling. Saved for all parks.
+[/list]
+[b]1.0.0[/b]: first release.
+
+[size=4][b]Bug reports[/b][/size]
+Please open the panel, open the habitat in question, click [b]Diagnose[/b] and post a screenshot of it with your report.
+
+[i]Unofficial fan mod, not affiliated with Frontier Developments.[/i]
