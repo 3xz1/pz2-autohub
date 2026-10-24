@@ -33,7 +33,7 @@ local math      = global.math
 
 local Core = module(...)
 
-Core.sVersion = "1.2.0"
+Core.sVersion = "1.4.2"
 Core.bBooted = false
 
 Core.sOverlayName = "PZ2AutoHubUI"
@@ -427,6 +427,7 @@ Core._OnHUDReady = function(self, oUI)
 		guarded("PZ2AutoHub_SetSiblings", 1, function(Logic, bOn) Logic:SetSiblings(bOn) end)
 		-- the tick carries a dummy value: argument-less events are not delivered reliably
 		guarded("PZ2AutoHub_SetKinds", 1, function(Logic, sKinds) Logic:SetKinds(sKinds) end)
+		guarded("PZ2AutoHub_SetKindCfg", 1, function(Logic, sText) Logic:SetKindCfg(sText) end)
 		guarded("PZ2AutoHub_SetInterval", 1, function(Logic, nSeconds) Logic:SetInterval(nSeconds) end)
 		guarded("PZ2AutoHub_SetContra", 1, function(Logic, bOn) Logic:SetContra(bOn) end)
 		guarded("PZ2AutoHub_SetContraKeys", 1, function(Logic, sList) Logic:SetContraKeys(sList) end)
