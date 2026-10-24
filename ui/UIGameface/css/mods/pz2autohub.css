@@ -71,6 +71,24 @@
     flex-shrink: 1;
     width: 0;
 }
+/* earnings table: equal columns, one line per kind */
+.PZ2AH_row.table {
+    flex-wrap: nowrap;
+    margin: 0.1539em 0;
+}
+.PZ2AH_row.table.total {
+    font-weight: bold;
+    border-top: 1px solid rgba(255, 242, 221, 0.3);
+    padding-top: 0.1539em;
+}
+.PZ2AH_cell {
+    flex-grow: 1;
+    flex-shrink: 1;
+    width: 0;
+}
+.PZ2AH_cell.head {
+    color: rgba(255, 242, 221, 0.75);
+}
 .PZ2AH_btn {
     padding: 0.2308em 0.6923em;
     margin: 0.1539em 0.4615em 0.1539em 0;
@@ -105,6 +123,53 @@
     padding: 0.0834em 0.5833em;
     font-size: 0.9231em;
     font-weight: normal;
+}
+/* an option that is not chosen (choices, tabs): outline only */
+.PZ2AH_btn.opt {
+    background: transparent;
+    color: #fff2dd;
+    border-color: rgba(255, 242, 221, 0.45);
+    font-weight: normal;
+}
+.PZ2AH_btn.opt:hover {
+    background: rgba(255, 242, 221, 0.15);
+    color: #fff2dd;
+    border-color: #fff2dd;
+}
+/* page tabs: Overview / Settings / Log */
+.PZ2AH_row.PZ2AH_tabs {
+    padding-bottom: 0.3076em;
+    border-bottom: 1px solid rgba(255, 242, 221, 0.3);
+    margin-bottom: 0.3076em;
+}
+.PZ2AH_btn.tab {
+    padding: 0.2308em 1.0em;
+}
+/* settings: label column, value of a stepper, help line */
+.PZ2AH_label {
+    width: 8.4615em;
+    flex-shrink: 0;
+    color: rgba(255, 242, 221, 0.75);
+}
+.PZ2AH_value {
+    font-weight: bold;
+    min-width: 3.0769em;
+    text-align: center;
+    margin-right: 0.4615em;
+}
+.PZ2AH_help {
+    color: rgba(255, 242, 221, 0.6);
+    font-size: 0.9231em;
+    margin: 0 0 0.3076em 8.4615em;
+}
+.PZ2AH_row.right {
+    justify-content: flex-end;
+}
+.PZ2AH_row.table.off {
+    color: rgba(255, 242, 221, 0.5);
+}
+.PZ2AH_cell.wide {
+    flex-grow: 3;
 }
 .PZ2AH_box {
     max-height: 13.8462em;

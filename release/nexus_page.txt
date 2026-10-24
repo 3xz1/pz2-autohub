@@ -2,16 +2,36 @@
 AutoHub - Automatic Inbreeding Check
 
 === BRIEF OVERVIEW (Nexus "summary", max 350 characters) ===
-Stop inbreeding before it happens. AutoHub finds animals living with a parent, or a brother and sister sharing a habitat, and sends the adults to Animal Storage or puts the young on contraception, with the game's own actions. Works in habitats, aquariums and vivariums. Off by default.
+Stop inbreeding before it happens. AutoHub finds animals living with a parent, or a brother and sister sharing a habitat, and moves the adults out (Animal Storage, Quick Trade or Quick Release) or puts the young on contraception. Own settings for habitats, aquariums and vivariums. Off by default.
 
 === DESCRIPTION (paste into the BBCode editor) ===
 [size=5][b]AutoHub[/b][/size]
-[i]Finds related animals living together and sends them to Animal Storage, or puts the young ones on contraception, so your habitats don't inbreed.[/i]
+[i]Finds related animals living together and moves them out (to Animal Storage, by Quick Trade or by Quick Release), or puts the young ones on contraception, so your habitats don't inbreed.[/i]
 
-Babies grow up, and before you notice, a daughter is breeding with her father. AutoHub checks your habitats for related animals and moves the adults to Animal Storage for you, using the game's own "Send to Animal Storage". It can also put newborns on contraception while they live with their family. You find it in the game's Esc menu, and a small panel shows what it is doing.
+Babies grow up, and before you notice, a daughter is breeding with her father. AutoHub checks your habitats for related animals and moves the adults out for you, with the game's own actions: "Send to Animal Storage", Quick Trade or Quick Release, your choice. It can also put newborns on contraception while they live with their family. You find it in the game's Esc menu, and a small panel shows what it is doing.
 
 [size=4][b]Habitats, aquariums and vivariums[/b][/size]
-AutoHub works in all three: [b]habitats[/b], [b]aquariums[/b] and [b]vivariums[/b]. Each one has its own switch in the panel ("Look at"), so you can turn off any kind you don't want AutoHub to touch. Auto mode and "Check all" skip the kinds you switched off; "Check the open habitat" always checks the one you have open.
+AutoHub works in all three: [b]habitats[/b], [b]aquariums[/b] and [b]vivariums[/b], and each one has its own settings:
+[list]
+[*]on or off (off: AutoHub doesn't touch this kind; "Check the open habitat" still checks one you have open);
+[*]Auto: Off, New adults or Always;
+[*]where the animals go: [b]Animal Storage[/b], [b]Quick Trade[/b] or [b]Quick Release[/b];
+[*]the brother + sister rule;
+[*]auto contraception.
+[/list]
+For example: fish shoals in aquariums sold by Quick Trade, lions in habitats sent to Animal Storage, vivariums left alone.
+
+[size=4][b]Where they go[/b][/size]
+[list]
+[*][b]Animal Storage[/b] (default): the game's own "Send to Animal Storage". A keeper carries them to your Trade Centre; you can bring them back later.
+[*][b]Quick Trade[/b]: sold at once, as with the game's Quick Trade button.
+[*][b]Quick Release[/b]: released into the wild at once, as with the game's Quick Release.
+[/list]
+The game doesn't allow Quick Trade or Quick Release for every animal (the same animals whose buttons are greyed out in the game). Those go to Animal Storage instead, and the log and a notice say why.
+
+Animals the game says are worth 0 go to Animal Storage instead by default; "Worth 0: Anyway" trades / releases them anyway.
+
+Every Quick Trade / Release is logged with its amount, and [b]Earnings in this park[/b] adds them up per habitats, aquariums, vivariums and all (saved per park).
 
 [size=4][b]Who leaves[/b][/size]
 AutoHub uses the game's own rule for related animals: a parent and its child, or two animals with at least one parent in common. In one habitat or vivarium:
@@ -26,7 +46,7 @@ Same-sex siblings stay together. Juveniles and elderly animals are never sent. C
 Switch it on and newborns living with their mother or father of the other sex get contraception right away (with the brother + sister rule on, also when they live with a brother or sister of the other sex). It uses the same toggle as the animal's info panel.
 [list]
 [*][b]On its own[/b] (Auto off): animals stay where they are, they just can't breed with their family.
-[*][b]Together with Auto[/b]: the young are on contraception while they grow up and go to Animal Storage once they are adults.
+[*][b]Together with Auto[/b]: the young are on contraception while they grow up and leave once they are adults.
 [*]Once such an animal lives without those relatives (moved, or placed again from storage), AutoHub takes the contraception off again. It only does that for animals it put on contraception itself.
 [*]If you switch it off by hand, AutoHub leaves it off.
 [/list]
@@ -38,17 +58,19 @@ Switch it on and newborns living with their mother or father of the other sex ge
 [*][b]In the Esc menu[/b]: a "Mods" box next to the game's menu opens the panel. The screen button can be switched off.
 [*][b]Auto mode[/b]: Off (default), [i]New adults[/i] (acts when an animal grows up) or [i]Always[/i] (checks everything regularly, also catches shoal splits).
 [*][b]Check every[/b]: how often auto mode checks, 1 s to 5 min of real time (default 5 s).
-[*][b]Look at[/b]: switch habitats, aquariums and vivariums on or off (all on by default).
+[*][b]Three pages[/b]: Overview (what each kind does, Check buttons, earnings), Settings (per kind and general; short help texts on request) and Log.
+[*][b]Settings per kind[/b]: habitats, aquariums and vivariums each have their own; one click copies them to the other two.
 [*][b]Auto contraception[/b]: on or off (off by default), with or without Auto mode.
-[*][b]Sent by auto[/b]: a list of what auto mode sent, plus a short notice for each animal.
+[*][b]Moved out by auto[/b]: a list of what auto mode moved out, how and for how much, plus a short notice for each animal.
+[*][b]Earnings in this park[/b]: animals traded / released and the total, per kind and for all.
 [*][b]Diagnose[/b]: shows the age group, sex and parents the game reports for every animal in the open habitat, handy for bug reports.
 [/list]
-The check buttons need two clicks, so nothing is sent by accident.
+The check buttons need two clicks, so nothing is moved by accident.
 
 [size=4][b]Good to know[/b][/size]
 [list]
-[*]Your zoo needs a Trade Centre with free storage space, as for the normal game action.
-[*]AutoHub only moves animals to Animal Storage. It never sells or releases them.
+[*]For Animal Storage your zoo needs a Trade Centre with free storage space, as for the normal game action.
+[*]AutoHub only sells or releases animals for the kinds where you picked Quick Trade or Quick Release. The default is Animal Storage.
 [*]Vivariums: the game loads family data for vivarium animals in the background. The first check after loading a park may say "family data is still loading"; check again a few seconds later.
 [*]The panel follows the game's UI scale and screen size, and the [b]Size[/b] setting (50-200 %) makes it smaller or bigger.
 [/list]
@@ -67,6 +89,41 @@ The check buttons need two clicks, so nothing is sent by accident.
 Works alongside [b]Guardian[/b]: they share the in-park screen and the "Mods" box in the Esc menu. Works alongside [b]Mike's QoL Toolbox[/b]: both share the in-park screen, in any install order. No game files are changed. The only thing written is AutoHub's own small entry in your player profile (its settings); nothing goes into park saves or online saves.
 
 [size=4][b]Changelog[/b][/size]
+[b]1.4.2[/b]
+[list]
+[*]New setting "Worth 0" (per kind, with Quick Trade / Quick Release): animals the game says are worth 0 go to Animal Storage instead (default), or are traded / released anyway.
+[/list]
+
+[b]1.4.1[/b]
+[list]
+[*]Fixed: Quick Release from aquariums (and other animals the game had not loaded yet) was logged and counted as 0. AutoHub now asks the game for the animal's data and waits up to 15 seconds for its value before trading or releasing it.
+[*]Diagnose shows the trade and release value of every animal in the open habitat or aquarium.
+[/list]
+
+[b]1.4.0[/b]
+[list]
+[*]The panel is tidier: three pages (Overview, Settings, Log) instead of one long page. Explanations are hidden unless you switch "Help texts" on. Chosen options are filled, the others outlined.
+[*]Times show as 13:15:03 instead of with the full time zone name.
+[/list]
+
+[b]1.3.1[/b]
+[list]
+[*]Quick Trade and Quick Release are logged with their amount.
+[*]New "Earnings in this park": how many animals were traded or released and for how much, per habitat / aquarium / vivarium and for all. Saved per park.
+[/list]
+
+[b]1.3.0[/b]
+[list]
+[*]Quick Trade and Quick Release: animals that have to leave can now be sold or released at once instead of going to Animal Storage. If the game doesn't allow it for an animal, it goes to Animal Storage and the log says why.
+[*]Every setting is now per kind: habitats, aquariums and vivariums each have their own on/off, Auto mode, action, Brother + sister rule and contraception. Your old settings are the starting values for all three.
+[/list]
+
+[b]1.2.1[/b]
+[list]
+[*]Fixed: Auto and auto contraception could stop a few minutes after loading a park ("Last check" no longer changed), while the Check buttons still worked. The check timer now has three independent drivers and warns in the log if checks stop answering.
+[*]Diagnose shows how many ticks were sent and received.
+[/list]
+
 [b]1.2.0[/b]
 [list]
 [*]Settings are now saved for good. They were lost every time the game closed, because the game's UI forgets them; they are now kept in your player profile. Set them once more after updating.

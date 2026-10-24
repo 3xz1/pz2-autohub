@@ -9,8 +9,13 @@
 --     only) both leave (optional, bSiblings).
 --  Fish shoals (aquariums and vivarium tanks): with 2+ shoals of one species, all but
 --  the youngest leave (a split shoal keeps the new one).
---  "Leaves" = the game's own "Send to Animal Storage" action (a keeper
---  carries it to the Trade Centre).
+--  "Leaves" = the kind's action (tCfg[kind].sAction): the game's own
+--  "Send to Animal Storage" (a keeper carries it to the Trade Centre),
+--  "Quick Trade" (sold at once) or "Quick Release" (into the wild). When
+--  the game does not allow a Quick Trade / Release for an animal, it goes
+--  to Animal Storage instead, with a note saying why.
+--  Every setting is per kind (habitat, aquarium, vivarium): tCfg[kind] =
+--  { bOn, sMode, bSiblings, bContra, sAction }.
 --  Contraception (bContra, independent of the auto mode): any animal, from
 --  birth, living with a parent of the other sex (or, with bSiblings, a
 --  sibling of the other sex) is put on contraception, as the info panel's
@@ -44,12 +49,23 @@ local table    = global.table
 
 local Logic = module(...)
 
-Logic.sMode = "off"            -- "off" | "new" | "always"
-Logic.bSiblings = true
--- which kinds of groups auto mode and "Check all" look at (switches in the UI)
-Logic.tKinds = { habitat = true, aquarium = true, exhibit = true }
+-- Settings per kind of group ("habitat" | "aquarium" | "exhibit" = vivarium):
+--   bOn       AutoHub looks at this kind at all (Auto, contraception, Check all)
+--   sMode     "off" | "new" | "always"
+--   bSiblings adult brother + sister pairs leave too
+--   bContra   auto contraception
+--   sAction   "storage" | "trade" (Quick Trade) | "release" (Quick Release)
+--   bZeroToStorage  an animal the game says is worth 0 goes to Animal
+--             Storage instead of being traded / released for nothing
+Logic.tKindNames = { "habitat", "aquarium", "exhibit" }
+local function defaultCfg()
+	return { bOn = true, sMode = "off", bSiblings = true, bContra = false, sAction = "storage", bZeroToStorage = true }
+end
+Logic.tCfg = { habitat = defaultCfg(), aquarium = defaultCfg(), exhibit = defaultCfg() }
+Logic.tActionNames = { storage = "Animal Storage", trade = "Quick Trade", release = "Quick Release" }
 -- The UI ticks once per (real) second; times below are in ticks = seconds.
 Logic.nTick = 0
+Logic.nTickEvents = 0          -- every tick event received, also skipped ones (Diagnose)
 Logic.nEvery = 5               -- auto checks every nEvery seconds (set in the UI)
 Logic.nMinEvery = 1
 Logic.nMaxEvery = 600
@@ -60,7 +76,6 @@ Logic.tWasJuvenile = {}        -- animal id -> true while seen as juvenile
 Logic.tPending = {}            -- animal id -> tick at which retrying stops
 Logic.tHold = {}               -- animal id -> { nUntil = tick, nHabitat = habitat it was in }
 Logic.tCallMode = {}           -- api function name -> "method" | "plain"
-Logic.bContra = false          -- auto contraception switch (UI)
 Logic.tContra = {}             -- GUID key -> "on" (AutoHub switched it on) | "player" (then switched off by hand)
 
 local Core = nil
@@ -126,6 +141,7 @@ local tExhibitGuard = {
 	GetExhibitAnimalName = "EntityIsExhibitAnimal",
 	GetExhibitAnimalAgeQuadrant = "EntityIsExhibitAnimal",
 	SetExhibitAnimalUsingContraceptive = "EntityIsExhibitAnimal",
+	SellAnimalFromExhibit = "EntityIsExhibitAnimal",
 }
 
 -- true only when the exhibits API confirms the ID (sCheck is
@@ -560,6 +576,222 @@ Logic._Send = function(self, nID, bExhibit)
 	return true
 end
 
+-- The game's info panels only offer Quick Trade / Quick Release while
+-- planetHub.IsPlayerAnimalMovementEnabled() says yes. true | false | nil
+-- (nil = the game has no such switch).
+local function movementEnabled()
+	local bOk, v = pcall(function() return api.planetHub.IsPlayerAnimalMovementEnabled() end)
+	if bOk and type(v) == "boolean" then
+		return v
+	end
+	return nil
+end
+
+-- Asks a "Can..." function. Returns true | false, why not.
+local function allowed(t, sCan, v, sWhat)
+	local bOk, r = call(t, sCan, v)
+	if not bOk then
+		return false, sWhat .. " not available (" .. tostring(r) .. ")"
+	end
+	if r[1] ~= true then
+		return false, "the game does not allow " .. sWhat .. " for this animal"
+	end
+	return true
+end
+
+-- What a Quick Trade / Release brings, as the game's relocate window
+-- shows it (RelocateAnimalsPopup): habitat animals
+-- animals:GetAnimalSellValue(id) / animals:GetServerAnimalReleaseValue(id),
+-- vivarium animals exhibits:GetExhibitAnimalSellValueUID(uid) /
+-- exhibits:GetAnimalReleaseValue(uid). A number, or nil if unknown.
+-- Habitat animals: a value of 0 can mean the game has not loaded the
+-- animal's data yet (seen in-game 2026-10-24: aquarium animals released
+-- for "0" that normally bring 70+). The game's own windows load it with
+-- franchise:RequestAnimalData(guid) (GenealogyPopUp) and read
+-- franchise:GetAnimalData(guid); that loads in the background. Then
+-- bLoading = true, and _Quick waits for it (at most nValueWait seconds).
+-- Returns nValue (nil = unknown), bLoading.
+Logic.nValueWait = 15       -- seconds a trade / release waits for its value
+Logic.nDataRetry = 5        -- seconds before asking the game again for an animal's data
+Logic._DataAsked = {}       -- GUID key -> time asked
+Logic.tValueWait = {}       -- animal id -> time it first waited for its value
+local function now()
+	local n = 0
+	pcall(function() n = api.time.GetTotalTimeUnscaled() end)
+	return type(n) == "number" and n or 0
+end
+
+Logic._Value = function(self, nID, bExhibit, sAction, vUID)
+	local bOk, r
+	if bExhibit then
+		local E = (worldAPIs() or {}).exhibits
+		if vUID == nil then
+			return nil
+		end
+		bOk, r = call(E, sAction == "trade" and "GetExhibitAnimalSellValueUID" or "GetAnimalReleaseValue", vUID)
+	else
+		bOk, r = call(animalsAPI(), sAction == "trade" and "GetAnimalSellValue" or "GetServerAnimalReleaseValue", nID)
+	end
+	if not (bOk and type(r[1]) == "number") then
+		return nil
+	end
+	if r[1] == 0 and not bExhibit and self:_RequestAnimalData(nID) then
+		-- the data may already be there
+		local bAgain, rAgain = call(animalsAPI(), sAction == "trade" and "GetAnimalSellValue" or "GetServerAnimalReleaseValue", nID)
+		if bAgain and type(rAgain[1]) == "number" and rAgain[1] ~= 0 then
+			return rAgain[1]
+		end
+		return 0, true
+	end
+	return r[1]
+end
+
+-- Asks the game to load a habitat animal's data (franchise:RequestAnimalData)
+-- unless franchise:GetAnimalData already has it. true = it is loading.
+Logic._RequestAnimalData = function(self, nID)
+	local F = (worldAPIs() or {}).franchise
+	local bG, rG = call(animalsAPI(), "EntityIDToAnimalGUID", nID)
+	local vGUID = bG and rG[1] or nil
+	if F == nil or vGUID == nil or vGUID == 0 or vGUID == "" or vGUID == "0" then
+		return false
+	end
+	local bHave, rHave = call(F, "GetAnimalData", vGUID)
+	if bHave and type(rHave[1]) == "table" then
+		-- loaded: the 0 is the real value
+		return false
+	end
+	local sKey = tostring(vGUID)
+	local nNow = now()
+	local nAsked = self._DataAsked[sKey]
+	if nAsked == nil or nNow - nAsked >= self.nDataRetry or nNow < nAsked then
+		self._DataAsked[sKey] = nNow
+		local bAsked = call(F, "RequestAnimalData", vGUID)
+		if not bAsked then
+			return false
+		end
+	end
+	return true
+end
+
+-- true once an animal has waited nValueWait seconds for its value
+Logic._ValueWaitOver = function(self, nID)
+	local nNow = now()
+	local nFirst = self.tValueWait[nID]
+	if nFirst == nil or nNow < nFirst then
+		self.tValueWait[nID] = nNow
+		return false
+	end
+	return nNow - nFirst >= self.nValueWait
+end
+
+-- Quick Trade ("trade") or Quick Release ("release"), as the game's
+-- relocate window does it (RelocateAnimalsPopup _AttemptSell/_AttemptRelease):
+--   habitat/aquarium animals and shoals: animals:CanSellAnimal(id) ->
+--     animals:InstantlySellAnimal(id); animals:CanReleaseAnimal(id) ->
+--     animals:ReleaseAnimalIntoWild(id);
+--   vivarium animals: exhibits:SellAnimalFromExhibit(exhibit animal entity)
+--     (the animal info panel asks animals:CanSellAnimal(animal entity));
+--     exhibits:CanReleaseAnimalUID(uid) -> exhibits:ReleaseAnimalIntoWild(uid).
+-- The value is read before the animal goes (see _Value). With
+-- bZeroToStorage, an animal worth 0 is refused (and goes to storage).
+-- Returns true, nValue (nil = unknown) | false, why not | nil, why it waits.
+local sWorthZero = "the game says it is worth 0"
+Logic._Quick = function(self, nID, bExhibit, sAction, bZeroToStorage)
+	local sWhat = self.tActionNames[sAction] or sAction
+	if movementEnabled() == false then
+		return false, "the game has animal moves switched off right now"
+	end
+	local A = animalsAPI()
+	if not bExhibit then
+		local sCan = sAction == "trade" and "CanSellAnimal" or "CanReleaseAnimal"
+		local sDo = sAction == "trade" and "InstantlySellAnimal" or "ReleaseAnimalIntoWild"
+		local bCan, sWhyNot = allowed(A, sCan, nID, sWhat)
+		if not bCan then
+			return false, sWhyNot
+		end
+		local nValue, bLoading = self:_Value(nID, false, sAction)
+		if bLoading and not self:_ValueWaitOver(nID) then
+			-- nil = not yet: the next check tries again
+			return nil, "waiting for the game to load its " .. (sAction == "trade" and "sale" or "release") .. " value"
+		end
+		self.tValueWait[nID] = nil
+		if bZeroToStorage and nValue == 0 then
+			return false, sWorthZero
+		end
+		local bOk, r = call(A, sDo, nID)
+		if not bOk then
+			return false, tostring(r)
+		end
+		return true, nValue
+	end
+	local E = (worldAPIs() or {}).exhibits
+	local bUID, rUID = call(E, "ExhibitAnimalEntityIDToUID", nID)
+	local vUID = bUID and rUID[1] or nil
+	if vUID == nil or vUID == 0 or vUID == "" or vUID == "0" then
+		return false, "no animal UID"
+	end
+	if sAction == "release" then
+		local bCan, sWhyNot = allowed(E, "CanReleaseAnimalUID", vUID, sWhat)
+		if not bCan then
+			return false, sWhyNot
+		end
+		local nValue = self:_Value(nID, true, sAction, vUID)
+		if bZeroToStorage and nValue == 0 then
+			return false, sWorthZero
+		end
+		local bOk, r = call(E, "ReleaseAnimalIntoWild", vUID)
+		if not bOk then
+			return false, tostring(r)
+		end
+		return true, nValue
+	end
+	local bE, rE = call(A, "AnimalGUIDToEntityID", vUID)
+	if bE and validEntity(rE[1]) then
+		local bCan, sWhyNot = allowed(A, "CanSellAnimal", rE[1], sWhat)
+		if not bCan then
+			return false, sWhyNot
+		end
+	end
+	local nValue = self:_Value(nID, true, sAction, vUID)
+	if bZeroToStorage and nValue == 0 then
+		return false, sWorthZero
+	end
+	local bOk, r = call(E, "SellAnimalFromExhibit", nID)
+	if not bOk then
+		return false, tostring(r)
+	end
+	return true, nValue
+end
+
+-- Does the kind's action for one animal. A Quick Trade / Release the game
+-- refuses falls back to Animal Storage.
+-- Returns true, sDone ("storage" | "trade" | "release"), sNote (why the
+-- fallback was needed), nValue (trade / release; nil = unknown) | false, error
+-- | nil, why it waits (its value is still loading; try again later).
+Logic._Act = function(self, nID, bExhibit, sAction, bZeroToStorage)
+	if sAction == "trade" or sAction == "release" then
+		local bOk, vResult = self:_Quick(nID, bExhibit, sAction, bZeroToStorage)
+		if bOk then
+			return true, sAction, nil, vResult
+		end
+		if bOk == nil then
+			return nil, vResult
+		end
+		local sWhyNot = vResult
+		local sNote = self.tActionNames[sAction] .. " not possible: " .. tostring(sWhyNot)
+		local bSent, sErr = self:_Send(nID, bExhibit)
+		if bSent then
+			return true, "storage", sNote
+		end
+		return false, sNote .. "; Animal Storage: " .. tostring(sErr)
+	end
+	local bSent, sErr = self:_Send(nID, bExhibit)
+	if bSent then
+		return true, "storage"
+	end
+	return false, sErr
+end
+
 -- Habitat animals of the whole zoo: animalAPI:GetAnimalsInPark(listType),
 -- as the game's own objectives call it.
 Logic._ParkAnimals = function(self)
@@ -839,8 +1071,13 @@ Logic._IsAquarium = function(self, nHabitat)
 	return bOk and r[1] == true
 end
 
+-- the settings of the group's kind
+Logic._Cfg = function(self, tGroup)
+	return self.tCfg[kindOf(tGroup)] or self.tCfg.habitat
+end
+
 Logic._IsEnabled = function(self, tGroup)
-	return self.tKinds[kindOf(tGroup)] ~= false
+	return tGroup ~= nil and self:_Cfg(tGroup).bOn ~= false
 end
 
 -- The groups whose switch is on. Member lists still cover every group, so
@@ -1048,7 +1285,7 @@ Logic._EvaluateGroup = function(self, tGroup)
 			end
 		end
 	end
-	if self.bSiblings then
+	if self:_Cfg(tGroup).bSiblings then
 		for i, a in ipairs(tAnimals) do
 			for j = i + 1, #tAnimals do
 				local b = tAnimals[j]
@@ -1137,22 +1374,48 @@ Logic._ReleaseHolds = function(self)
 	end
 end
 
--- Sends the entries (skipping animals on hold). Returns nSent, nFailed, tNotes.
--- Names are read BEFORE sending: a sent vivarium animal's ID may be gone
--- right after (see CRASH WARNING above).
+local tDoneVerb = { storage = "sent", trade = "sold", release = "released" }
+
+-- "12,345" (rounded)
+local function amountText(n)
+	local s = string.format("%d", math.floor(n + 0.5))
+	local sSign, sDigits = string.match(s, "^(-?)(%d+)$")
+	sDigits = string.reverse((string.gsub(string.reverse(sDigits), "(%d%d%d)", "%1,")))
+	return sSign .. (string.gsub(sDigits, "^,", ""))
+end
+
+-- Moves the entries out with their kind's action (skipping animals on
+-- hold). Returns nDone, nFailed, tNotes. Notes of moved animals start with
+-- "sent " (Animal Storage), "sold " (Quick Trade) or "released " (Quick
+-- Release), sold / released ones end with " for <amount>"; a fallback to
+-- storage adds " - <why>, sent to Animal Storage instead".
+-- Every trade / release also goes to the UI's earnings:
+-- PZ2AutoHub_Earned(kind, "trade" | "release", value; -1 = unknown).
+-- Animals whose value is still loading are skipped (4th result nWaiting);
+-- the next check tries them again. Names are read BEFORE moving: a moved vivarium animal's ID may
+-- be gone right after (see CRASH WARNING above).
 Logic._SendEntries = function(self, tEntries, bReport)
-	local nSent, nFailed, tNotes = 0, 0, {}
+	local nSent, nFailed, tNotes, nWaiting = 0, 0, {}, 0
 	for _, e in ipairs(tEntries) do
 		if not self:_IsHeld(e.nID) then
 			local sName, sWhy = self:_Name(e.nID), self:_Why(e)
-			local bSent, sErr = self:_Send(e.nID, e.bExhibit)
-			if bSent then
+			local tCfg = e.tGroup and self:_Cfg(e.tGroup) or {}
+			local bSent, sErr, sNote, nValue = self:_Act(e.nID, e.bExhibit, tCfg.sAction or "storage", tCfg.bZeroToStorage)
+			if bSent == nil then
+				nWaiting = nWaiting + 1
+			elseif bSent then
+				local sDone = sErr
 				nSent = nSent + 1
 				self:_SetHold(e.nID, self.nSentHold, e.tGroup)
+				if sDone ~= "storage" then
+					toUI("PZ2AutoHub_Earned", e.tGroup and kindOf(e.tGroup) or "habitat", sDone, nValue or -1)
+				end
 				if bReport then
-					toUI("PZ2AutoHub_AutoSent", sName, sWhy)
+					toUI("PZ2AutoHub_AutoSent", sName, sWhy, sDone, sNote or "", nValue or -1)
 				else
-					tNotes[#tNotes + 1] = "sent " .. sName .. " (" .. sWhy .. ")"
+					tNotes[#tNotes + 1] = tDoneVerb[sDone] .. " " .. sName .. " (" .. sWhy .. ")"
+						.. (sDone ~= "storage" and (" for " .. (nValue and amountText(nValue) or "an unknown amount")) or "")
+						.. (sNote and (" - " .. sNote .. ", sent to Animal Storage instead") or "")
 				end
 			else
 				nFailed = nFailed + 1
@@ -1161,7 +1424,10 @@ Logic._SendEntries = function(self, tEntries, bReport)
 			end
 		end
 	end
-	return nSent, nFailed, tNotes
+	if nWaiting > 0 and not bReport then
+		tNotes[#tNotes + 1] = "values still loading for " .. nWaiting .. " animals: check again in a few seconds"
+	end
+	return nSent, nFailed, tNotes, nWaiting
 end
 
 -- Groups of the open panel: the panel's own entity (a habitat or an
@@ -1245,7 +1511,7 @@ end
 
 -- The relative of the other sex (parent first, then sibling with
 -- bSiblings) an animal lives with, or nil. An unknown sex counts as other.
-Logic._ContraRelative = function(self, f, tAnimals)
+Logic._ContraRelative = function(self, f, tAnimals, bSiblings)
 	local function otherSex(a, b)
 		return a.sGender == nil or b.sGender == nil or a.sGender ~= b.sGender
 	end
@@ -1254,7 +1520,7 @@ Logic._ContraRelative = function(self, f, tAnimals)
 			return p, "parent"
 		end
 	end
-	if self.bSiblings then
+	if bSiblings then
 		for _, b in ipairs(tAnimals) do
 			if b.nID ~= f.nID and otherSex(f, b) and not isParentOf(f, b) and not isParentOf(b, f)
 				and shareParent(f, b) then
@@ -1295,7 +1561,7 @@ Logic._ContraGroup = function(self, tGroup, tAll)
 		local sKey = f.sKey
 		if sKey ~= nil then
 			local sState = self.tContra[sKey]
-			local oWith, sWhy = self:_ContraRelative(f, tAnimals)
+			local oWith, sWhy = self:_ContraRelative(f, tAnimals, self:_Cfg(tGroup).bSiblings)
 			if oWith ~= nil then
 				if sState ~= "player" then
 					local bUsing = self:_UsingContra(f.nID, bExhibit)
@@ -1341,25 +1607,34 @@ Logic._ContraGroup = function(self, tGroup, tAll)
 	return nOn, nOff
 end
 
--- Every switched-on group, once. The evaluations are handed on, so the
+-- Every switched-on group whose kind has contraception on, once. The
+-- evaluations are handed on ({ [groupName] = { tEntries, tAll } }), so the
 -- send step of the same tick reuses them (same fresh member lists).
 Logic._TickContra = function(self)
-	local tGroups = self:_EnabledGroups(self.tZoo and self.tZoo.tGroups or self:_AllGroups())
-	local tEval = { tGroups = tGroups, tResults = {} }
+	local tEval = {}
 	local nAnimals, nOn, nOff = 0, 0, 0
-	for i, tGroup in ipairs(tGroups) do
-		local tEntries, tAll = self:_EvaluateGroup(tGroup)
-		tEval.tResults[i] = { tEntries = tEntries, tAll = tAll }
-		nAnimals = nAnimals + #tAll
-		local a, b = self:_ContraGroup(tGroup, tAll)
-		nOn, nOff = nOn + a, nOff + b
+	for _, tGroup in ipairs(self:_EnabledGroups(self.tZoo and self.tZoo.tGroups or self:_AllGroups())) do
+		if self:_Cfg(tGroup).bContra then
+			local tEntries, tAll = self:_EvaluateGroup(tGroup)
+			tEval[groupName(tGroup)] = { tEntries = tEntries, tAll = tAll }
+			nAnimals = nAnimals + #tAll
+			local a, b = self:_ContraGroup(tGroup, tAll)
+			nOn, nOff = nOn + a, nOff + b
+		end
 	end
 	toUI("PZ2AutoHub_ContraStatus", nAnimals, nOn, nOff)
 	return tEval
 end
 
+-- one setting for all three kinds (older UI events)
+Logic._SetAll = function(self, sField, v)
+	for _, sKind in ipairs(self.tKindNames) do
+		self.tCfg[sKind][sField] = v
+	end
+end
+
 Logic.SetContra = function(self, bOn)
-	self.bContra = bOn == true or bOn == "true"
+	self:_SetAll("bContra", bOn == true or bOn == "true")
 end
 
 -- the UI's saved list for this park ("key:on,key:player")
@@ -1377,7 +1652,8 @@ end
 -- features
 -----------------------------------------------------------------------
 
--- "off" | "new" | "always" (true/false accepted from older UI versions)
+-- "off" | "new" | "always" for all kinds (true/false accepted from older
+-- UI versions)
 Logic.SetAuto = function(self, vMode)
 	local sMode = vMode
 	if vMode == true or vMode == "true" then
@@ -1385,15 +1661,18 @@ Logic.SetAuto = function(self, vMode)
 	elseif vMode ~= "new" and vMode ~= "always" then
 		sMode = "off"
 	end
-	if sMode ~= self.sMode then
-		-- "new" only counts transitions observed from now on
-		self:Reset()
+	for _, sKind in ipairs(self.tKindNames) do
+		if self.tCfg[sKind].sMode ~= sMode then
+			-- "new" only counts transitions observed from now on
+			self:Reset()
+			break
+		end
 	end
-	self.sMode = sMode
+	self:_SetAll("sMode", sMode)
 end
 
 Logic.SetSiblings = function(self, bOn)
-	self.bSiblings = bOn == true or bOn == "true"
+	self:_SetAll("bSiblings", bOn == true or bOn == "true")
 end
 
 -- "habitat,exhibit" = the kinds that are switched on ("none" = all off)
@@ -1404,7 +1683,67 @@ Logic.SetKinds = function(self, sKinds)
 			t[sKind] = true
 		end
 	end
-	self.tKinds = t
+	for sKind, bOn in pairs(t) do
+		self.tCfg[sKind].bOn = bOn
+	end
+end
+
+-- Every setting per kind, from the UI:
+-- "habitat,1,always,1,0,trade,1;aquarium,...;exhibit,..." =
+-- kind, on, auto mode, brother + sister, contraception, action, worth 0 ->
+-- storage (left out: unchanged)
+Logic.SetKindCfg = function(self, sText)
+	local bReset = false
+	for sPart in string.gmatch(tostring(sText or ""), "[^;]+") do
+		local t = {}
+		for v in string.gmatch(sPart, "[^,]+") do
+			t[#t + 1] = v
+		end
+		local tCfg = self.tCfg[t[1] or ""]
+		if tCfg ~= nil then
+			local sMode = (t[3] == "new" or t[3] == "always") and t[3] or "off"
+			if sMode ~= tCfg.sMode then
+				bReset = true
+			end
+			tCfg.bOn = t[2] == "1"
+			tCfg.sMode = sMode
+			tCfg.bSiblings = t[4] == "1"
+			tCfg.bContra = t[5] == "1"
+			tCfg.sAction = self.tActionNames[t[6] or ""] and t[6] or "storage"
+			if t[7] ~= nil then
+				tCfg.bZeroToStorage = t[7] == "1"
+			end
+		end
+	end
+	if bReset then
+		-- "new" only counts transitions observed from now on
+		self:Reset()
+	end
+end
+
+-- What the tick has to do: bAuto (a switched-on kind has an auto mode),
+-- bContra (a switched-on kind has contraception on).
+Logic._Wanted = function(self)
+	local bAuto, bContra = false, false
+	for _, sKind in ipairs(self.tKindNames) do
+		local tCfg = self.tCfg[sKind]
+		if tCfg.bOn then
+			bAuto = bAuto or tCfg.sMode ~= "off"
+			bContra = bContra or tCfg.bContra
+		end
+	end
+	return bAuto, bContra
+end
+
+-- the switched-on groups whose kind has auto mode sMode
+Logic._ModeGroups = function(self, sMode)
+	local tOut = {}
+	for _, tGroup in ipairs(self:_EnabledGroups(self.tZoo and self.tZoo.tGroups or self:_AllGroups())) do
+		if self:_Cfg(tGroup).sMode == sMode then
+			tOut[#tOut + 1] = tGroup
+		end
+	end
+	return tOut
 end
 
 -- habitats (without aquariums), vivariums, aquariums
@@ -1423,12 +1762,13 @@ local function countKinds(tGroups)
 	return nHabitats, nExhibits, nAquariums
 end
 
--- tEval: this tick's evaluations from _TickContra, if it ran.
+-- Groups whose kind is on "Always". tEval: this tick's evaluations from
+-- _TickContra, if it ran. Returns the groups, nAnimals, nSent.
 Logic._TickAlways = function(self, tEval)
-	local tGroups = tEval and tEval.tGroups or self:_EnabledGroups(self.tZoo and self.tZoo.tGroups or self:_AllGroups())
+	local tGroups = self:_ModeGroups("always")
 	local nAnimals, nSentTotal = 0, 0
-	for i, tGroup in ipairs(tGroups) do
-		local tDone = tEval and tEval.tResults[i]
+	for _, tGroup in ipairs(tGroups) do
+		local tDone = tEval and tEval[groupName(tGroup)]
 		local tEntries, tAll
 		if tDone then
 			tEntries, tAll = tDone.tEntries, tDone.tAll
@@ -1442,8 +1782,7 @@ Logic._TickAlways = function(self, tEval)
 			log("not sent yet: " .. s)
 		end
 	end
-	local nHabitats, nExhibits, nAquariums = countKinds(tGroups)
-	toUI("PZ2AutoHub_AutoStatus", nHabitats, nAnimals, nSentTotal, nExhibits, nAquariums)
+	return tGroups, nAnimals, nSentTotal
 end
 
 -- Every animal of every group: list, groups, { [id] = bExhibit },
@@ -1463,26 +1802,30 @@ Logic._ZooAnimals = function(self)
 	return tOut, tGroups, tExhibit, tMember
 end
 
+-- Groups whose kind is on "New adults". Returns the groups, nAnimals.
 Logic._TickNew = function(self)
 	local tZoo = self.tZoo or self:_RefreshMembers()
 	local tAnimals, tExhibit = tZoo.tAnimals, tZoo.tExhibit
-	local tGroups = self:_EnabledGroups(tZoo.tGroups)
+	local tGroups = self:_ModeGroups("new")
+	local function isNewMode(tGroup)
+		return tGroup ~= nil and self:_IsEnabled(tGroup) and self:_Cfg(tGroup).sMode == "new"
+	end
 	local nAnimals = 0
 	for _, nID in ipairs(tAnimals) do
-		if self:_IsEnabled(self.tMembers[nID]) then
+		if isNewMode(self.tMembers[nID]) then
 			nAnimals = nAnimals + 1
 		end
 	end
-	local nHabitats, nExhibits, nAquariums = countKinds(tGroups)
-	toUI("PZ2AutoHub_AutoStatus", nHabitats, nAnimals, -1, nExhibits, nAquariums)
 	for _, nID in ipairs(tAnimals) do
-		local sStage = self:_StageOf(nID, tExhibit[nID])
-		if sStage == "juvenile" then
-			self.tWasJuvenile[nID] = true
-		elseif self.tWasJuvenile[nID] then
-			self.tWasJuvenile[nID] = nil
-			if sStage == "adult" then
-				self.tPending[nID] = self.nTick + self.nRetryTicks
+		if isNewMode(self.tMembers[nID]) then
+			local sStage = self:_StageOf(nID, tExhibit[nID])
+			if sStage == "juvenile" then
+				self.tWasJuvenile[nID] = true
+			elseif self.tWasJuvenile[nID] then
+				self.tWasJuvenile[nID] = nil
+				if sStage == "adult" then
+					self.tPending[nID] = self.nTick + self.nRetryTicks
+				end
 			end
 		end
 	end
@@ -1490,8 +1833,8 @@ Logic._TickNew = function(self)
 		local tMine = {}
 		-- where it lives now, from the fresh member lists (a gone animal is dropped)
 		local tGroup = self.tMembers and self.tMembers[nID]
-		if tGroup ~= nil and not self:_IsEnabled(tGroup) then
-			-- its kind is switched off: forget it
+		if not isNewMode(tGroup) then
+			-- gone, or its kind is switched off / not on "New adults": forget it
 			tGroup = nil
 		end
 		if tGroup == nil then
@@ -1509,8 +1852,10 @@ Logic._TickNew = function(self)
 			self.tPending[nID] = nil
 			log(self:_Name(nID) .. " grew up, no relatives where it lives")
 		else
-			local _, nFailed, tNotes = self:_SendEntries(tMine, true)
-			if nFailed == 0 then
+			local _, nFailed, tNotes, nWaiting = self:_SendEntries(tMine, true)
+			if nWaiting > 0 then
+				-- still pending: tried again at the next check
+			elseif nFailed == 0 then
 				self.tPending[nID] = nil
 			elseif self.nTick >= nUntil then
 				self.tPending[nID] = nil
@@ -1520,6 +1865,7 @@ Logic._TickNew = function(self)
 			end
 		end
 	end
+	return tGroups, nAnimals
 end
 
 -- Seconds between auto checks (whole number, nMinEvery..nMaxEvery).
@@ -1530,11 +1876,14 @@ Logic.SetInterval = function(self, vSeconds)
 end
 
 -- One tick per second from the UI; the auto check itself runs right after
--- switching auto on, then every nEvery ticks.
+-- switching auto on, then every nEvery ticks. Each kind follows its own
+-- settings.
 -- Contraception runs first: sending a vivarium animal can end its entity,
 -- and no exhibit call may follow on it (see CRASH WARNING above).
 Logic.Tick = function(self)
-	if (self.sMode == "off" and not self.bContra) or not self.bParkLive then
+	self.nTickEvents = self.nTickEvents + 1
+	local bAuto, bContra = self:_Wanted()
+	if not (bAuto or bContra) or not self.bParkLive then
 		return
 	end
 	self.nTick = self.nTick + 1
@@ -1545,13 +1894,21 @@ Logic.Tick = function(self)
 	self:_RefreshMembers()
 	self:_ReleaseHolds()
 	local tEval = nil
-	if self.bContra then
+	if bContra then
 		tEval = self:_TickContra()
 	end
-	if self.sMode == "always" then
-		self:_TickAlways(tEval)
-	elseif self.sMode == "new" then
-		self:_TickNew()
+	if bAuto then
+		local tAlways, nAlways, nSent = self:_TickAlways(tEval)
+		local tNew, nNew = self:_TickNew()
+		local tGroups = {}
+		for _, g in ipairs(tAlways) do
+			tGroups[#tGroups + 1] = g
+		end
+		for _, g in ipairs(tNew) do
+			tGroups[#tGroups + 1] = g
+		end
+		local nHabitats, nExhibits, nAquariums = countKinds(tGroups)
+		toUI("PZ2AutoHub_AutoStatus", nHabitats, nAlways + nNew, nSent, nExhibits, nAquariums)
 	end
 end
 
@@ -1609,6 +1966,23 @@ end
 
 -- Writes what the game returns for the panel's group to the UI log.
 Logic.Diagnose = function(self, sIDs, sPanelID)
+	-- habitat animals: what Quick Trade / Release would bring now, and
+	-- whether the game has the animal's data loaded (see _Value)
+	local function valuesText(nID)
+		local tWorld = worldAPIs() or {}
+		local bG, rG = call(animalsAPI(), "EntityIDToAnimalGUID", nID)
+		local sData = "?"
+		if bG and rG[1] ~= nil and tWorld.franchise ~= nil then
+			local bHave, rHave = call(tWorld.franchise, "GetAnimalData", rG[1])
+			sData = bHave and (type(rHave[1]) == "table" and "loaded" or "not loaded") or tostring(rHave)
+		end
+		local function plain(sName)
+			local bOk, r = call(animalsAPI(), sName, nID)
+			return bOk and tostring(r[1]) or ("? " .. tostring(r))
+		end
+		return ", values: trade " .. plain("GetAnimalSellValue") .. ", release " .. plain("GetServerAnimalReleaseValue")
+			.. " (data " .. sData .. ")"
+	end
 	local A = animalsAPI()
 	log("--- PZ2AutoHub " .. (Core and Core.sVersion or "?") .. " diagnose ---")
 	local tWorld = worldAPIs() or {}
@@ -1648,11 +2022,17 @@ Logic.Diagnose = function(self, sIDs, sPanelID)
 		log("Trade Centre for " .. (bEx and "vivarium" or "habitat") .. " animals: " .. tostring(bHas)
 			.. ", " .. storageText(bEx, nUsed, nMax))
 	end
-	log("auto: " .. self.sMode .. (self.bParkLive and "" or " (paused: park closing)") .. " every " .. self.nEvery .. " s, siblings rule: " .. tostring(self.bSiblings) .. ", ticks: " .. self.nTick
+	log("auto" .. (self.bParkLive and "" or " (paused: park closing)") .. ": every " .. self.nEvery .. " s, ticks: " .. self.nTick
+		.. " (received " .. self.nTickEvents .. ", last check at " .. tostring(self.nLastCheck) .. ")"
 		.. ", habitats: " .. nHabitats .. ", aquariums: " .. nAquariums .. ", vivariums: " .. nExhibits
 		.. ", animals: " .. #tZoo)
-	log("switched on: habitats " .. tostring(self.tKinds.habitat) .. ", aquariums " .. tostring(self.tKinds.aquarium)
-		.. ", vivariums " .. tostring(self.tKinds.exhibit))
+	for _, sKind in ipairs(self.tKindNames) do
+		local c = self.tCfg[sKind]
+		log(sKind .. ": " .. (c.bOn and "on" or "OFF") .. ", auto " .. c.sMode .. ", brother + sister "
+			.. tostring(c.bSiblings) .. ", contraception " .. tostring(c.bContra) .. ", action " .. self.tActionNames[c.sAction]
+			.. ", worth 0 -> " .. (c.bZeroToStorage and "storage" or "anyway"))
+	end
+	log("animal moves allowed by the game (planetHub): " .. tostring(movementEnabled()))
 	local nOnKeys, nPlayerKeys = 0, 0
 	for _, v in pairs(self.tContra) do
 		if v == "on" then
@@ -1661,7 +2041,7 @@ Logic.Diagnose = function(self, sIDs, sPanelID)
 			nPlayerKeys = nPlayerKeys + 1
 		end
 	end
-	log("contraception: " .. (self.bContra and "on" or "off") .. ", set by AutoHub: " .. nOnKeys
+	log("contraception set by AutoHub: " .. nOnKeys
 		.. ", switched off by hand: " .. nPlayerKeys)
 	for _, tGroup in ipairs(self:_PanelGroups(sIDs, sPanelID)) do
 		local tEntries, tAll = self:_EvaluateGroup(tGroup)
@@ -1679,21 +2059,21 @@ Logic.Diagnose = function(self, sIDs, sPanelID)
 				break
 			end
 			if f.bShoal then
-				log(string.format("#%s %s: shoal of %s, age %s", tostring(f.nID), self:_Name(f.nID),
-					tostring(f.sSpecies), tostring(f.nAge)))
+				log(string.format("#%s %s: shoal of %s, age %s%s", tostring(f.nID), self:_Name(f.nID),
+					tostring(f.sSpecies), tostring(f.nAge), bGroupExhibit and "" or valuesText(f.nID)))
 			else
 				local tKeys = {}
 				for k in pairs(f.tParentKeys) do
 					tKeys[#tKeys + 1] = k
 				end
 				table.sort(tKeys)
-				local oWith = self:_ContraRelative(f, tNoShoals)
+				local oWith = self:_ContraRelative(f, tNoShoals, self:_Cfg(tGroup).bSiblings)
 				local sMine = f.sKey and self.tContra[f.sKey]
-				log(string.format("#%s %s (%s): %s %s, guid %s, parents [%s]%s, contraception %s%s%s", tostring(f.nID),
+				log(string.format("#%s %s (%s): %s %s, guid %s, parents [%s]%s, contraception %s%s%s%s", tostring(f.nID),
 					self:_Name(f.nID), tostring(f.sSpecies), tostring(f.sStage), tostring(f.sGender), tostring(f.sKey),
 					table.concat(tKeys, " "), f.sTree and (", family tree " .. f.sTree) or "",
 					tostring(self:_UsingContra(f.nID, bGroupExhibit)), sMine and (" (" .. sMine .. ")") or "",
-					oWith and (", needs it: with " .. self:_Name(oWith.nID)) or ""))
+					oWith and (", needs it: with " .. self:_Name(oWith.nID)) or "", bGroupExhibit and "" or valuesText(f.nID)))
 			end
 		end
 		if #tEntries == 0 then
@@ -1701,12 +2081,23 @@ Logic.Diagnose = function(self, sIDs, sPanelID)
 		end
 		for _, e in ipairs(tEntries) do
 			if e.bExhibit then
-				local _, rUID = call(tWorld.exhibits, "ExhibitAnimalEntityIDToUID", e.nID)
-				log("=> " .. self:_Name(e.nID) .. " leaves (" .. self:_Why(e) .. "), sent via exhibits API as uid "
-					.. dump(rUID) .. ", habitat entity " .. tostring(self:_BrainID(e.nID)))
+				local bUID, rUID = call(tWorld.exhibits, "ExhibitAnimalEntityIDToUID", e.nID)
+				local rFree = "no uid"
+				if bUID and rUID[1] ~= nil then
+					local _, r = call(tWorld.exhibits, "CanReleaseAnimalUID", rUID[1])
+					rFree = r
+				end
+				log("=> " .. self:_Name(e.nID) .. " leaves (" .. self:_Why(e) .. ") by " .. self.tActionNames[self:_Cfg(tGroup).sAction]
+					.. ", via exhibits API as uid " .. dump(rUID) .. ", habitat entity " .. tostring(self:_BrainID(e.nID))
+					.. ", canRelease " .. dump(rFree) .. ", values: trade " .. tostring(bUID and self:_Value(e.nID, true, "trade", rUID[1]))
+					.. ", release " .. tostring(bUID and self:_Value(e.nID, true, "release", rUID[1])))
 			else
 				local _, rCan = call(A, "CanSendAnimalToTradeCentre", e.nID)
-				log("=> " .. self:_Name(e.nID) .. " leaves (" .. self:_Why(e) .. "), canSend " .. dump(rCan))
+				local _, rSell = call(A, "CanSellAnimal", e.nID)
+				local _, rFree = call(A, "CanReleaseAnimal", e.nID)
+				log("=> " .. self:_Name(e.nID) .. " leaves (" .. self:_Why(e) .. ") by " .. self.tActionNames[self:_Cfg(tGroup).sAction]
+					.. ", canSend " .. dump(rCan) .. ", canTrade " .. dump(rSell) .. " (value " .. tostring(self:_Value(e.nID, false, "trade"))
+					.. "), canRelease " .. dump(rFree) .. " (value " .. tostring(self:_Value(e.nID, false, "release")) .. ")")
 			end
 			if e.bExhibit then
 				-- every plain field of the exhibit record (looking for the flock's own entity ID)

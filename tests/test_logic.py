@@ -213,8 +213,37 @@ function FR:GetAnimalFamilyTreeData(uid)
   local function member(p) return { id = (p == 0) and 0 or (p + 1000), name = "A" .. p, gender = false } end
   return { mother = member(a.parents[1]), father = member(a.parents[2]), siblings = {}, children = {} }
 end
+-- Quick Trade / Quick Release (RelocateAnimalsPopup): noTrade / noRelease
+-- on an animal make the game's "Can..." answer false
+sold, released = {}, {}
+function A:CanSellAnimal(id) local a = animals[id] or animals[id - 20000]; return a ~= nil and not a.noTrade end
+function A:InstantlySellAnimal(id) if animals[id].ex then error("not a habitat animal") end sold[#sold+1] = id; animals[id].hab = 0 end
+function A:CanReleaseAnimal(id) local a = animals[id]; return a ~= nil and not a.ex and not a.noRelease end
+function A:ReleaseAnimalIntoWild(id) if animals[id].ex then error("not a habitat animal") end released[#released+1] = id; animals[id].hab = 0 end
+function X:CanReleaseAnimalUID(uid) local a = animals[uid - 1000]; return a ~= nil and a.ex ~= nil and a.ex ~= 0 and not a.noRelease end
+function X:ReleaseAnimalIntoWild(uid) local a = animals[uid - 1000]; released[#released+1] = uid - 1000; a.ex = 0 end
+function X:SellAnimalFromExhibit(id) if goneExhibitAnimal(id) then return end sold[#sold+1] = id; animals[id].ex = 0 end
+-- what the relocate window shows (value = nil on an animal: the game gives nothing)
+function A:GetAnimalSellValue(id) local a = animals[id]; if a.noValue then return nil end return a.sellValue or 1234.6 end
+-- lazy = true: like aquarium animals in-game, the release value is 0 until
+-- franchise:RequestAnimalData(guid) has loaded the animal's data
+dataLoaded, dataRequests, dataDelay = {}, {}, false
+function A:GetServerAnimalReleaseValue(id)
+  local a = animals[id]
+  if a.noValue then return nil end
+  if a.lazy and not dataLoaded[id + 1000] then return 0 end
+  return a.releaseValue or 200
+end
+function FR:GetAnimalData(guid) if dataLoaded[guid] then return { guid = guid } end return nil end
+function FR:RequestAnimalData(guid) dataRequests[#dataRequests + 1] = guid; if not dataDelay then dataLoaded[guid] = true end return #dataRequests end
+function deliverData() for _, g in ipairs(dataRequests) do dataLoaded[g] = true end end
+function X:GetExhibitAnimalSellValueUID(uid) return 75 end
+zeroExhibitValue = false
+function X:GetAnimalReleaseValue(uid) if zeroExhibitValue then return 0 end return 30 end
+movesOn = true
 api = { world = { GetWorldAPIs = function() return { animals = A, habitat = H, facilities = F, exhibits = X, park = P, franchise = FR } end },
-  entity = { NullEntityID = 0 }, time = { GetTotalTimeUnscaled = function() return clock or 0 end } }
+  entity = { NullEntityID = 0 }, time = { GetTotalTimeUnscaled = function() return clock or 0 end },
+  planetHub = { IsPlayerAnimalMovementEnabled = function() return movesOn end } }
 """)
 
 with open(SRC, encoding="utf-8") as fh:
@@ -313,7 +342,7 @@ lua.execute('Logic:SetAuto("new"); Logic:Tick()')
 check("new: first tick sends nobody", sent(), [])
 lua.execute('animals[4].age = "A"; Logic:Tick()')
 check("new: grown-up daughter living with parents is sent", sent(), [4])
-check("new: notification with reason", [str(v) for v in ui_events("PZ2AutoHub_AutoSent")[-1]],
+check("new: notification with reason", [str(v) for v in ui_events("PZ2AutoHub_AutoSent")[-1]][:2],
       ["[STRING_LITERAL:Value=|Animal4|]", "lives with parent [STRING_LITERAL:Value=|Animal1|]"])
 
 # 5. Auto "new" ignores animals that were adults before; "always" does not
@@ -511,6 +540,196 @@ logs = [e[0] for e in ui_events("PZ2AutoHub_Log")]
 check("diagnose produced lines", len(logs) >= 5, True)
 for line in logs[-7:]:
     print("   log:", line)
+
+# 8. Settings per kind and the actions (Quick Trade / Quick Release)
+def moved(name):
+    return sorted(lua.eval(name).values())
+
+def reset_moves():
+    lua.execute('sent = {}; sold = {}; released = {}; Logic.tHold = {}; Logic.tPending = {}')
+
+lua.execute("""
+Logic:SetAuto("off"); Logic:SetContra(false); treeDelay = false
+animals[120] = {hab=700, age="A", sex="f", parents={0, 0}}
+animals[121] = {hab=700, age="A", sex="m", parents={120, 0}}
+animals[122] = {hab=700, age="A", sex="f", parents={120, 0}}
+""")
+lua.execute('Logic:SetKindCfg("habitat,1,off,1,0,trade;aquarium,1,off,1,0,storage;exhibit,1,off,1,0,release")')
+check("kind config: habitat action", lua.eval("Logic.tCfg.habitat.sAction"), "trade")
+check("kind config: vivarium action", lua.eval("Logic.tCfg.exhibit.sAction"), "release")
+check("kind config: unknown action falls back to storage",
+      lua.eval('(function() Logic:SetKindCfg("aquarium,1,off,1,0,eat"); return Logic.tCfg.aquarium.sAction end)()'), "storage")
+reset_moves()
+lua.execute('Logic:SendFromHabitat("", "700")')
+check("Quick Trade: both children sold", moved("sold"), [121, 122])
+check("Quick Trade: nobody sent to storage", moved("sent"), [])
+check("Quick Trade: result says sold", "sold " in str(ui_events("PZ2AutoHub_Result")[-1][2]), True)
+check("Quick Trade: result has the amount", "for 1,235" in str(ui_events("PZ2AutoHub_Result")[-1][2]), True)
+earned = ui_events("PZ2AutoHub_Earned")
+check("Quick Trade: earnings per kind", [[str(v) for v in e] for e in earned[-2:]], [["habitat", "trade", "1234.6"]] * 2)
+
+# refused by the game -> Animal Storage, with the reason
+lua.execute('animals[121].hab = 700; animals[122].hab = 700; animals[122].noTrade = true')
+reset_moves()
+lua.execute('Logic:SendFromHabitat("", "700")')
+check("Quick Trade refused: sold the allowed one", moved("sold"), [121])
+check("Quick Trade refused: sent the other to storage", moved("sent"), [122])
+notes = str(ui_events("PZ2AutoHub_Result")[-1][2])
+check("Quick Trade refused: note says why", "Quick Trade not possible: the game does not allow Quick Trade" in notes
+      and "sent to Animal Storage instead" in notes, True)
+
+# Quick Release
+lua.execute('animals[121].hab = 700; animals[122].hab = 700; animals[122].noTrade = nil')
+lua.execute('Logic:SetKindCfg("habitat,1,off,1,0,release;aquarium,1,off,1,0,storage;exhibit,1,off,1,0,release")')
+reset_moves()
+lua.execute('Logic:SendFromHabitat("", "700")')
+check("Quick Release: both released", moved("released"), [121, 122])
+check("Quick Release: earnings", [list(e) for e in ui_events("PZ2AutoHub_Earned")[-2:]], [["habitat", "release", 200]] * 2)
+
+# the game has animal moves switched off: everything goes to storage
+lua.execute('animals[121].hab = 700; animals[122].hab = 700; movesOn = false')
+reset_moves()
+lua.execute('Logic:SendFromHabitat("", "700")')
+check("moves off: nobody released", moved("released"), [])
+check("moves off: both sent to storage", moved("sent"), [121, 122])
+check("moves off: note says why", "animal moves switched off" in str(ui_events("PZ2AutoHub_Result")[-1][2]), True)
+lua.execute('movesOn = true')
+
+# release value still loading (aquarium animals in-game said "0"): wait for it
+lua.execute('animals[121].hab = 700; animals[122].hab = 700; animals[121].lazy = true; animals[122].lazy = true; animals[122].releaseValue = 75')
+reset_moves()
+lua.execute('dataDelay = false; Logic:SendFromHabitat("", "700")')
+check("value loads at once: released", moved("released"), [121, 122])
+check("value loads at once: real values", sorted(e[2] for e in ui_events("PZ2AutoHub_Earned")[-2:]), [75, 200])
+lua.execute('animals[121].hab = 700; animals[122].hab = 700; dataLoaded = {}; dataRequests = {}; dataDelay = true; clock = 100')
+reset_moves()
+lua.execute('Logic:SendFromHabitat("", "700")')
+check("value loading: nobody released yet", moved("released"), [])
+check("value loading: nobody sent to storage", moved("sent"), [])
+check("value loading: result says so", "values still loading for 2 animals" in str(ui_events("PZ2AutoHub_Result")[-1][2]), True)
+check("value loading: the game was asked", len(lua.eval("dataRequests")) >= 2, True)
+lua.execute('deliverData(); clock = 103; Logic:SendFromHabitat("", "700")')
+check("value loaded: released", moved("released"), [121, 122])
+check("value loaded: real values", sorted(e[2] for e in ui_events("PZ2AutoHub_Earned")[-2:]), [75, 200])
+# the data never comes: after nValueWait the animal goes anyway, for 0
+# ("Worth 0: anyway"; the default sends it to storage, see below)
+lua.execute('Logic.tCfg.habitat.bZeroToStorage = false')
+lua.execute('animals[121].hab = 700; animals[122].hab = 700; dataLoaded = {}; dataRequests = {}; Logic.tValueWait = {}; clock = 200')
+reset_moves()
+lua.execute('Logic:SendFromHabitat("", "700"); clock = 210; Logic:SendFromHabitat("", "700")')
+check("still loading after 10 s: waits", moved("released"), [])
+lua.execute('clock = 216; Logic:SendFromHabitat("", "700")')
+check("after 15 s: released anyway", moved("released"), [121, 122])
+check("after 15 s: value 0", [e[2] for e in ui_events("PZ2AutoHub_Earned")[-2:]], [0, 0])
+# a real 0 (data loaded) does not wait
+lua.execute('animals[121].hab = 700; animals[122].hab = 700; animals[121].releaseValue = 0; animals[122].releaseValue = 0; dataDelay = false; deliverData(); Logic.tValueWait = {}')
+reset_moves()
+lua.execute('Logic:SendFromHabitat("", "700")')
+check("real 0 with data loaded: no waiting", moved("released"), [121, 122])
+# Worth 0 -> Animal Storage (the default)
+lua.execute('animals[121].hab = 700; animals[122].hab = 700; animals[122].releaseValue = 50; Logic.tValueWait = {}')
+lua.execute('Logic:SetKindCfg("habitat,1,off,1,0,release,1;aquarium,1,off,1,0,storage;exhibit,1,off,1,0,release")')
+check("kind config: worth 0 -> storage", lua.eval("Logic.tCfg.habitat.bZeroToStorage"), True)
+reset_moves()
+lua.execute('Logic:SendFromHabitat("", "700")')
+check("worth 0: sent to storage", moved("sent"), [121])
+check("worth 0: the other one released", moved("released"), [122])
+check("worth 0: note says why", "the game says it is worth 0, sent to Animal Storage instead" in str(ui_events("PZ2AutoHub_Result")[-1][2]), True)
+lua.execute('Logic:SetKindCfg("habitat,1,off,1,0,release;aquarium,1,off,1,0,storage;exhibit,1,off,1,0,release")')
+check("kind config: left out keeps worth 0", lua.eval("Logic.tCfg.habitat.bZeroToStorage"), True)
+# vivarium worth 0
+lua.execute("""
+animals[67] = {hab=0, ex=500, q=2, sex="f", parents={0, 0}}
+animals[68] = {hab=0, ex=500, q=1, sex="m", parents={67, 0}}
+""")
+lua.execute('zeroExhibitValue = true; Logic:SetKindCfg("habitat,1,off,1,0,release,1;aquarium,1,off,1,0,storage;exhibit,1,off,1,0,release,1")')
+reset_moves()
+lua.execute('engineCrashes = 0; Logic:SendFromHabitat("", "500")')
+check("vivarium worth 0: sent to storage", 68 in moved("sent") and 68 not in moved("released"), True)
+check("vivarium worth 0: no engine crash", lua.eval("engineCrashes"), 0)
+lua.execute('zeroExhibitValue = false; animals[67] = nil; animals[68] = nil')
+lua.execute('animals[121].releaseValue = nil; animals[122].releaseValue = nil; Logic.tCfg.habitat.bZeroToStorage = false')
+lua.execute('animals[121].lazy = nil; animals[122].lazy = nil; animals[121].releaseValue = nil; animals[122].releaseValue = nil; dataDelay = false; clock = 0')
+# auto mode keeps a waiting animal and releases it once the value is there
+lua.execute('animals[121].hab = 700; animals[121].lazy = true; dataLoaded = {}; dataRequests = {}; dataDelay = true; Logic.tValueWait = {}; clock = 300')
+lua.execute('Logic:SetKindCfg("habitat,1,always,1,0,release;aquarium,1,off,1,0,storage;exhibit,1,off,1,0,release")')
+reset_moves()
+lua.execute('Logic:Tick(); Logic:Tick()')
+check("auto: waits for the value", 121 in moved("released"), False)
+lua.execute('deliverData(); clock = 302; Logic:Tick(); Logic:Tick()')
+check("auto: released once loaded", 121 in moved("released"), True)
+check("auto: with its value", list(ui_events("PZ2AutoHub_AutoSent")[-1])[4], 200)
+lua.execute('animals[121].lazy = nil; dataDelay = false; clock = 0')
+lua.execute('Logic:SetKindCfg("habitat,1,off,1,0,release;aquarium,1,off,1,0,storage;exhibit,1,off,1,0,release")')
+lua.execute('animals[121].hab = 700; animals[122].hab = 700')
+
+# vivarium: release by UID, sale from the exhibit
+lua.execute("""
+animals[60] = {hab=0, ex=500, q=2, sex="f", parents={0, 0}}
+animals[61] = {hab=0, ex=500, q=1, sex="m", parents={60, 0}}
+animals[62] = {hab=0, ex=500, q=1, sex="f", parents={60, 0}}
+""")
+reset_moves()
+lua.execute('engineCrashes = 0; Logic:SendFromHabitat("", "500")')
+check("vivarium Quick Release: children released", [n for n in moved("released") if n >= 60], [61, 62])
+check("vivarium Quick Release: earnings", [list(e) for e in ui_events("PZ2AutoHub_Earned")[-2:]], [["exhibit", "release", 30]] * 2)
+check("vivarium Quick Release: no engine crash", lua.eval("engineCrashes"), 0)
+lua.execute('animals[61].ex = 500; animals[62].ex = 500')
+lua.execute('Logic:SetKindCfg("habitat,1,off,1,0,release;aquarium,1,off,1,0,storage;exhibit,1,off,1,0,trade")')
+reset_moves()
+lua.execute('engineCrashes = 0; Logic:SendFromHabitat("", "500")')
+check("vivarium Quick Trade: children sold", [n for n in moved("sold") if n >= 60], [61, 62])
+check("vivarium Quick Trade: earnings", [list(e) for e in ui_events("PZ2AutoHub_Earned")[-2:]], [["exhibit", "trade", 75]] * 2)
+check("vivarium Quick Trade: no engine crash", lua.eval("engineCrashes"), 0)
+
+# auto per kind: habitats on Always, vivariums Off -> only the habitat moves
+lua.execute('animals[121].hab = 700; animals[122].hab = 700; animals[61].ex = 500; animals[62].ex = 500')
+lua.execute('Logic:SetKindCfg("habitat,1,always,1,0,trade;aquarium,1,off,1,0,storage;exhibit,1,off,1,0,trade")')
+reset_moves()
+lua.execute('Logic:Tick(); Logic:Tick()')
+check("auto per kind: habitat children sold", [n for n in moved("sold") if n >= 120], [121, 122])
+check("auto per kind: vivarium untouched", [n for n in moved("sold") + moved("sent") + moved("released") if 60 <= n < 70], [])
+autosent = ui_events("PZ2AutoHub_AutoSent")[-1]
+check("auto per kind: notification names the action", str(autosent[2]), "trade")
+check("auto per kind: notification has the value", autosent[4], 1234.6)
+# no value from the game: -1 (unknown) in the earnings, "an unknown amount" in the notes
+lua.execute('animals[121].hab = 700; animals[121].noValue = true')
+lua.execute('Logic:SetKindCfg("habitat,1,off,1,0,trade;aquarium,1,off,1,0,storage;exhibit,1,off,1,0,trade")')
+reset_moves()
+lua.execute('Logic:SendFromHabitat("", "700")')
+check("unknown value: earnings get -1", list(ui_events("PZ2AutoHub_Earned")[-1]), ["habitat", "trade", -1])
+check("unknown value: note says so", "for an unknown amount" in str(ui_events("PZ2AutoHub_Result")[-1][2]), True)
+lua.execute('animals[121].noValue = nil')
+lua.execute('Logic:SetKindCfg("habitat,1,always,1,0,trade;aquarium,1,off,1,0,storage;exhibit,1,off,1,0,trade")')
+
+# brother + sister per kind: off for vivariums -> the siblings stay there
+lua.execute("""
+animals[63] = {hab=0, ex=500, q=2, sex="m", parents={98, 97}}
+animals[64] = {hab=0, ex=500, q=2, sex="f", parents={98, 97}}
+animals[60].ex = 0; animals[61].ex = 0; animals[62].ex = 0
+""")
+lua.execute('Logic:SetKindCfg("habitat,1,off,1,0,trade;aquarium,1,off,1,0,storage;exhibit,1,off,0,0,trade")')
+reset_moves()
+lua.execute('Logic:SendFromHabitat("", "500")')
+check("siblings off for vivariums: they stay", [n for n in moved("sold") if n in (63, 64)], [])
+lua.execute('Logic:SetKindCfg("habitat,1,off,1,0,trade;aquarium,1,off,1,0,storage;exhibit,1,off,1,0,trade")')
+reset_moves()
+lua.execute('Logic:SendFromHabitat("", "500")')
+check("siblings on for vivariums: both leave", [n for n in moved("sold") if n in (63, 64)], [63, 64])
+
+# contraception per kind: on for habitats only
+lua.execute("""
+animals[123] = {hab=700, age="J", sex="m", parents={120, 0}}
+animals[65] = {hab=0, ex=500, q=0, sex="m", parents={66, 0}}
+animals[66] = {hab=0, ex=500, q=2, sex="f", parents={0, 0}}
+Logic:SetContraKeys("")
+""")
+lua.execute('Logic:SetKindCfg("habitat,1,off,1,1,storage;aquarium,1,off,1,0,storage;exhibit,1,off,1,0,storage"); Logic:Tick(); Logic:Tick()')
+check("contraception per kind: habitat newborn on", lua.eval("animals[123].contra"), True)
+check("contraception per kind: vivarium newborn untouched", lua.eval("animals[65].contra"), None)
+for i in list(range(120, 124)) + list(range(60, 67)):
+    lua.execute(f'animals[{i}] = nil')
+lua.execute('Logic:SetKindCfg("habitat,1,off,1,0,storage;aquarium,1,off,1,0,storage;exhibit,1,off,1,0,storage")')
 
 # crash 2026-10-18: GetAnimalsInExhibit on exhibit 520 (listed by
 # GetAllExhibits, but EntityIsExhibit says no) crashed the engine
