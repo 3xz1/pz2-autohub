@@ -7,8 +7,9 @@
 --   * an ADULT living with its mother or father leaves;
 --   * ADULT brother + sister (one shared parent is enough, opposite sex
 --     only) both leave (optional, bSiblings).
---  Fish shoals (aquariums and vivarium tanks): with 2+ shoals of one species, all but
---  the youngest leave (a split shoal keeps the new one).
+--  Fish shoals (aquariums and vivarium tanks): with more than nShoals shoals
+--  of one species in one tank, the oldest leave (a split shoal keeps the new
+--  one).
 --  "Leaves" = the kind's action (tCfg[kind].sAction): the game's own
 --  "Send to Animal Storage" (a keeper carries it to the Trade Centre),
 --  "Quick Trade" (sold at once) or "Quick Release" (into the wild). When
@@ -26,8 +27,8 @@
 --
 --   * SendFromHabitat: button in the habitat / vivarium panel, checks it now.
 --   * Tick (driven by the UI every 3 s) in auto mode:
---       "new":    only animals seen growing from juvenile to adult while
---                 the mode is on (and the relatives they pair with);
+--       "new":    only adults seen as juveniles in their current group
+--                 (and the relatives they pair with), at every check;
 --       "always": every habitat and vivarium, every 5th tick (~15 s).
 --
 --  Game API shapes were read from the game's compiled Lua, not from docs,
@@ -57,9 +58,24 @@ local Logic = module(...)
 --   sAction   "storage" | "trade" (Quick Trade) | "release" (Quick Release)
 --   bZeroToStorage  an animal the game says is worth 0 goes to Animal
 --             Storage instead of being traded / released for nothing
+--   bGenes    with Quick Trade / Release: an animal whose genes reach every
+--             limit in tMinGenes (percent, 0 = no limit) is kept in Animal
+--             Storage for breeding; the others are traded / released.
+--   sMale / sFemale  "genes" (checked) | "always" (traded / released
+--             without a gene check)
+--   bGrownOnly "Who leaves: grown up here": only animals AutoHub saw as
+--             juveniles in this group may leave (and get contraception);
+--             adults the player placed there stay (tYoung).
+--   nShoals   shoals of one species one tank may keep (the youngest);
+--             0 = no limit (shoals are never moved)
 Logic.tKindNames = { "habitat", "aquarium", "exhibit" }
+-- the game's four gene values (GetGeneticGrades: nSize is shown as "Vitality")
+Logic.tGeneNames = { "Size", "Longevity", "Fertility", "Immunity" }
+Logic.tGeneLabels = { Size = "Vitality", Longevity = "Longevity", Fertility = "Fertility", Immunity = "Immunity" }
 local function defaultCfg()
-	return { bOn = true, sMode = "off", bSiblings = true, bContra = false, sAction = "storage", bZeroToStorage = true }
+	return { bOn = true, sMode = "off", bSiblings = true, bContra = false, sAction = "storage", bZeroToStorage = true,
+		bGenes = false, tMinGenes = { Size = 0, Longevity = 0, Fertility = 0, Immunity = 0 }, sMale = "genes", sFemale = "genes",
+		bGrownOnly = false, nShoals = 1 }
 end
 Logic.tCfg = { habitat = defaultCfg(), aquarium = defaultCfg(), exhibit = defaultCfg() }
 Logic.tActionNames = { storage = "Animal Storage", trade = "Quick Trade", release = "Quick Release" }
@@ -69,14 +85,29 @@ Logic.nTickEvents = 0          -- every tick event received, also skipped ones (
 Logic.nEvery = 5               -- auto checks every nEvery seconds (set in the UI)
 Logic.nMinEvery = 1
 Logic.nMaxEvery = 600
-Logic.nRetryTicks = 300        -- a grown-up animal that can't be sent is retried for ~5 minutes
 Logic.nSentHold = 300          -- at most ~5 minutes: a sent animal still in its habitat is retried after that
 Logic.nFailHold = 60           -- retry a refused animal after ~1 minute
-Logic.tWasJuvenile = {}        -- animal id -> true while seen as juvenile
-Logic.tPending = {}            -- animal id -> tick at which retrying stops
 Logic.tHold = {}               -- animal id -> { nUntil = tick, nHabitat = habitat it was in }
+Logic.nCalls = 0                -- game calls made (Diagnose: per check)
+Logic.nCheckCalls = nil         -- game calls of the last auto check
+-- Facts that never change (sex, parents) by GUID key, kept while the animal
+-- is seen in the park (forgotten nForgetSeconds after the last sighting).
+-- Parents known only by entity ID (IDs can be reused) are read again after
+-- nStaticSeconds to twice that; and every animal's facts during one auto check, so
+-- tracking, contraception and sending read each animal once.
+Logic.tStatic = {}
+Logic.nStaticSeconds = 120
+Logic.nForgetSeconds = 600
+Logic.tFactsNow = nil
 Logic.tCallMode = {}           -- api function name -> "method" | "plain"
 Logic.tContra = {}             -- GUID key -> "on" (AutoHub switched it on) | "player" (then switched off by hand)
+-- "Grown up here": GUID keys of animals seen as juveniles in their current
+-- group (saved per park by the UI), the group each key was last seen in
+-- (this session), and how many tracking passes in a row missed a key.
+Logic.tYoung = {}
+Logic.tSeenIn = {}
+Logic.tYoungMiss = {}
+Logic.nYoungPrune = 3          -- passes a key may be missing before it is forgotten
 
 local Core = nil
 
@@ -90,16 +121,29 @@ end
 -- engine (crash dump 2026-10-18 13:06), so call() makes no game calls.
 Logic.bParkLive = true
 
+-- "New adults" checks everyone once when a park opens (adults that grew up
+-- before AutoHub knew them), until the game has the data loaded: no
+-- vivarium family trees or values still loading, or nStartTries checks.
+Logic.bStartCheck = true
+Logic.nStartTry = 0
+Logic.nStartTries = 12
+
 Logic.SetParkLive = function(self, bLive)
 	self.bParkLive = bLive == true
 	if not self.bParkLive then
 		self:Reset()
+		self:StartPark()
 	end
 end
 
+-- a park opens (new HUD, or after leaving one)
+Logic.StartPark = function(self)
+	self.bStartCheck = true
+	self.nStartTry = 0
+	self.tStatic = {}
+end
+
 Logic.Reset = function(self)
-	self.tWasJuvenile = {}
-	self.tPending = {}
 	self.tHold = {}
 	self.nLastCheck = nil
 end
@@ -174,6 +218,7 @@ local function call(t, sName, ...)
 	if not bGot or fn == nil then
 		return false, sName .. " missing"
 	end
+	Logic.nCalls = Logic.nCalls + 1
 	local tArgs = table.pack(...)
 	local sMode = Logic.tCallMode[sName]
 	local function try(bMethod)
@@ -1187,18 +1232,41 @@ end
 -- text, and "e<entity>" for parents that still exist), so siblings are
 -- found even when the shared parent has died or left the zoo.
 Logic._Facts = function(self, nID, bExhibit)
-	local A = animalsAPI()
-	local t = { nID = nID, sStage = self:_StageOf(nID, bExhibit), sGender = self:_GenderOf(nID, bExhibit), tParentKeys = {} }
-	t.bShoal, t.sSpecies, t.nAge = self:_ShoalInfo(nID, bExhibit)
-	if t.bShoal then
-		return t
+	local tNow = self.tFactsNow
+	local sMemo = (bExhibit and "x" or "h") .. tostring(nID)
+	local t = tNow and tNow[sMemo]
+	if t == nil then
+		t = self:_ReadFacts(nID, bExhibit)
+		if tNow then
+			tNow[sMemo] = t
+		end
+	elseif t.sTree == "loading" then
+		self.nTreesLoading = (self.nTreesLoading or 0) + 1
 	end
+	return t
+end
+
+Logic._ReadFacts = function(self, nID, bExhibit)
+	local A = animalsAPI()
+	local t = { nID = nID, sStage = self:_StageOf(nID, bExhibit), tParentKeys = {} }
 	local bG, rG = call(A, "EntityIDToAnimalGUID", nID)
 	if not (bG and usableKey(rG[1])) then
 		bG, rG = callAny("ExhibitAnimalEntityIDToUID", nID)
 	end
 	if bG and usableKey(rG[1]) then
 		t.sKey = keyOf(rG[1])
+	end
+	local tC = t.sKey and not self.bNoCache and self.tStatic[t.sKey]
+	local nNow = now()
+	if tC and nNow >= tC.nAt and nNow < tC.nUntil then
+		tC.nSeen = nNow
+		t.sGender, t.tParentKeys, t.bParentsKnown, t.sTree = tC.sGender, tC.tParentKeys, tC.bParentsKnown, tC.sTree
+		return t
+	end
+	t.sGender = self:_GenderOf(nID, bExhibit)
+	t.bShoal, t.sSpecies, t.nAge = self:_ShoalInfo(nID, bExhibit)
+	if t.bShoal then
+		return t
 	end
 	local tRaw = self:_ParentsRaw(nID)
 	-- whether "no parent here" can be trusted (contraception is only taken
@@ -1224,12 +1292,24 @@ Logic._Facts = function(self, nID, bExhibit)
 			end
 		end
 	end
+	-- a living parent by GUID; by entity ID only when it has none
+	local bByEntity = false
 	for _, nParent in ipairs(self:_Parents(nID) or {}) do
-		t.tParentKeys["e" .. tostring(nParent)] = true
 		local bP, rP = call(A, "EntityIDToAnimalGUID", nParent)
 		if bP and usableKey(rP[1]) then
 			t.tParentKeys[keyOf(rP[1])] = true
+		else
+			t.tParentKeys["e" .. tostring(nParent)] = true
+			bByEntity = true
 		end
+	end
+	-- vivarium parents only once the family tree is there
+	if t.sKey ~= nil and t.sGender ~= nil and tRaw ~= nil and (not bExhibit or t.sTree == "ok") then
+		-- entity-ID parents: spread out, so they are not all read again in one check
+		local nNow = now()
+		local nUntil = bByEntity and (nNow + self.nStaticSeconds * (1 + math.random())) or math.huge
+		self.tStatic[t.sKey] = { nAt = nNow, nSeen = nNow, nUntil = nUntil, sGender = t.sGender,
+			tParentKeys = t.tParentKeys, bParentsKnown = t.bParentsKnown, sTree = t.sTree }
 	end
 	return t
 end
@@ -1254,8 +1334,8 @@ end
 -- { nID, sWhy ("parent" | "sibling" | "shoal"), nWith } and the facts.
 --  * adult living with its mother or father: the child leaves;
 --  * adult brother + sister (shared parent, opposite sex): both leave;
---  * 2+ fish shoals of one species: all but the youngest leave (a shoal
---    that split in two keeps the new one). Shoals skip the other rules.
+--  * more than nShoals fish shoals of one species: the oldest leave (a
+--    shoal that split in two keeps the new one). Shoals skip the other rules.
 Logic._EvaluateGroup = function(self, tGroup)
 	local bExhibit = tGroup.sKind == "exhibit"
 	local tAll, tAnimals, tShoals = {}, {}, {}
@@ -1272,7 +1352,8 @@ Logic._EvaluateGroup = function(self, tGroup)
 	local function add(f, sWhy, oWith)
 		if not tSeen[f.nID] then
 			tSeen[f.nID] = true
-			tOut[#tOut + 1] = { nID = f.nID, sWhy = sWhy, nWith = oWith.nID, bExhibit = bExhibit, tGroup = tGroup }
+			tOut[#tOut + 1] = { nID = f.nID, sWhy = sWhy, nWith = oWith.nID, bExhibit = bExhibit, tGroup = tGroup,
+				sSpecies = f.sSpecies }
 		end
 	end
 	for _, c in ipairs(tAnimals) do
@@ -1303,8 +1384,9 @@ Logic._EvaluateGroup = function(self, tGroup)
 		tBySpecies[sKey] = tBySpecies[sKey] or {}
 		table.insert(tBySpecies[sKey], f)
 	end
+	local nKeep = self:_Cfg(tGroup).nShoals or 1
 	for _, tList in pairs(tBySpecies) do
-		if #tList >= 2 then
+		if nKeep > 0 and #tList > nKeep then
 			-- youngest first; same age: the newer entity (higher ID) counts as younger
 			table.sort(tList, function(a, b)
 				local nA, nB = a.nAge or math.huge, b.nAge or math.huge
@@ -1313,12 +1395,118 @@ Logic._EvaluateGroup = function(self, tGroup)
 				end
 				return a.nID > b.nID
 			end)
-			for i = 2, #tList do
+			for i = nKeep + 1, #tList do
 				add(tList[i], "shoal", tList[1])
+				tOut[#tOut].nKeep = nKeep
 			end
 		end
 	end
+	if self:_Cfg(tGroup).bGrownOnly then
+		-- only animals that grew up here leave; shoals keep their own rule
+		local tKey = {}
+		for _, f in ipairs(tAll) do
+			tKey[f.nID] = f.sKey
+		end
+		local tKept = {}
+		for _, e in ipairs(tOut) do
+			if e.sWhy == "shoal" or self:_GrewUpHere(tKey[e.nID]) then
+				tKept[#tKept + 1] = e
+			end
+		end
+		tOut = tKept
+	end
 	return tOut, tAll
+end
+
+Logic._GrewUpHere = function(self, sKey)
+	return sKey ~= nil and self.tYoung[sKey] == true
+end
+
+-- The animal's GUID key (exhibit animals: their UID), as in _Facts.
+Logic._KeyOf = function(self, nID, bExhibit)
+	local bG, rG = call(animalsAPI(), "EntityIDToAnimalGUID", nID)
+	if not (bG and usableKey(rG[1])) and bExhibit then
+		bG, rG = callAny("ExhibitAnimalEntityIDToUID", nID)
+	end
+	if bG and usableKey(rG[1]) then
+		return keyOf(rG[1])
+	end
+	return nil
+end
+
+-- "Grown up here" bookkeeping, once per check, for the switched-on groups
+-- whose kind uses it or Auto "New adults": a juvenile is remembered; an adult seen in another
+-- group than before (moved this session) is forgotten; keys missing for
+-- nYoungPrune passes (sent away, in storage) are forgotten. Changes go to
+-- the UI, which saves them per park.
+Logic._TrackYoung = function(self)
+	local tGroups = {}
+	for _, tGroup in ipairs(self:_EnabledGroups(self.tZoo and self.tZoo.tGroups or self:_AllGroups())) do
+		local tCfg = self:_Cfg(tGroup)
+		if tCfg.bGrownOnly or tCfg.sMode == "new" then
+			tGroups[#tGroups + 1] = tGroup
+		end
+	end
+	if #tGroups == 0 then
+		return
+	end
+	local bChanged, tPresent, nSeen = false, {}, 0
+	for _, tGroup in ipairs(tGroups) do
+		local bExhibit = tGroup.sKind == "exhibit"
+		local sGroup = groupName(tGroup)
+		for _, nID in ipairs(self:_GroupAnimals(tGroup)) do
+			local f = self:_Facts(nID, bExhibit)
+			local sKey = f.sKey
+			if sKey ~= nil then
+				nSeen = nSeen + 1
+				tPresent[sKey] = true
+				local sStage = f.sStage
+				if sStage == "juvenile" then
+					if not self.tYoung[sKey] then
+						self.tYoung[sKey] = true
+						bChanged = true
+					end
+				elseif self.tSeenIn[sKey] ~= nil and self.tSeenIn[sKey] ~= sGroup and self.tYoung[sKey] then
+					-- moved to another group as an adult: placed there
+					self.tYoung[sKey] = nil
+					bChanged = true
+				end
+				self.tSeenIn[sKey] = sGroup
+			end
+		end
+	end
+	if nSeen > 0 then
+		for sKey in pairs(self.tYoung) do
+			if tPresent[sKey] then
+				self.tYoungMiss[sKey] = nil
+			else
+				self.tYoungMiss[sKey] = (self.tYoungMiss[sKey] or 0) + 1
+				if self.tYoungMiss[sKey] >= self.nYoungPrune then
+					self.tYoung[sKey] = nil
+					self.tYoungMiss[sKey] = nil
+					bChanged = true
+				end
+			end
+		end
+	end
+	if bChanged then
+		local tKeys = {}
+		for sKey in pairs(self.tYoung) do
+			tKeys[#tKeys + 1] = sKey
+		end
+		table.sort(tKeys)
+		toUI("PZ2AutoHub_YoungKeys", table.concat(tKeys, ","))
+	end
+end
+
+-- the UI's saved list for this park ("key,key,...")
+Logic.SetYoungKeys = function(self, sList)
+	local t = {}
+	for sKey in string.gmatch(tostring(sList or ""), "[^,]+") do
+		t[sKey] = true
+	end
+	self.tYoung = t
+	self.tYoungMiss = {}
 end
 
 Logic._Why = function(self, tEntry)
@@ -1326,7 +1514,11 @@ Logic._Why = function(self, tEntry)
 	if tEntry.sWhy == "parent" then
 		return "lives with parent " .. sWith
 	elseif tEntry.sWhy == "shoal" then
-		return "older shoal, keeping " .. sWith
+		local sSpecies = tostring(tEntry.sSpecies or "same species")
+		if (tEntry.nKeep or 1) > 1 then
+			return "older " .. sSpecies .. " shoal, keeping the " .. tEntry.nKeep .. " youngest"
+		end
+		return "older " .. sSpecies .. " shoal, keeping " .. sWith
 	end
 	return "sibling of " .. sWith
 end
@@ -1374,6 +1566,76 @@ Logic._ReleaseHolds = function(self)
 	end
 end
 
+-- The game's four gene values in percent (0-100), as the info panel's
+-- genetics tab reads them: animals:GetGeneticGrades(id), vivarium animals
+-- exhibits:GetExhibitAnimalUIDGeneticGrades(uid) (CompareMatesUIUtils).
+-- Fields nSize ("Vitality"), nLongevity, nFertility, nImmunity. The game
+-- keeps them as 0-1; values above 1 are taken as percent already.
+-- Returns { Size = 62, ... } or nil (unknown).
+Logic._Genes = function(self, nID, bExhibit)
+	local bOk, r
+	if bExhibit then
+		local E = (worldAPIs() or {}).exhibits
+		local bUID, rUID = call(E, "ExhibitAnimalEntityIDToUID", nID)
+		if not (bUID and rUID[1] ~= nil) then
+			return nil
+		end
+		bOk, r = call(E, "GetExhibitAnimalUIDGeneticGrades", rUID[1])
+	else
+		bOk, r = call(animalsAPI(), "GetGeneticGrades", nID)
+	end
+	if not (bOk and type(r[1]) == "table") then
+		return nil
+	end
+	local tRaw, bPercent = {}, false
+	for _, sGene in ipairs(self.tGeneNames) do
+		local v = r[1]["n" .. sGene]
+		if type(v) ~= "number" then
+			return nil
+		end
+		tRaw[sGene] = v
+		bPercent = bPercent or v > 1.0001
+	end
+	local tOut = {}
+	for sGene, v in pairs(tRaw) do
+		tOut[sGene] = math.floor((bPercent and v or v * 100) + 0.5)
+	end
+	return tOut
+end
+
+-- "Vitality 62, Longevity 55, Fertility 70, Immunity 30"
+local function genesText(tGenes)
+	local tParts = {}
+	for _, sGene in ipairs(Logic.tGeneNames) do
+		tParts[#tParts + 1] = Logic.tGeneLabels[sGene] .. " " .. tostring(tGenes[sGene])
+	end
+	return table.concat(tParts, ", ")
+end
+
+-- With "keep good genes": what happens to one animal that has to leave.
+-- Shoals and animals of an "always" sex follow the action; an animal whose
+-- genes reach every limit (or are unknown) is kept in Animal Storage.
+-- Returns sAction, sNote (why it is kept; nil = follows the action).
+Logic._GeneDecision = function(self, e, tCfg)
+	if not tCfg.bGenes or (tCfg.sAction ~= "trade" and tCfg.sAction ~= "release") or e.sWhy == "shoal" then
+		return tCfg.sAction
+	end
+	local sGender = self:_GenderOf(e.nID, e.bExhibit)
+	if (sGender == "male" and tCfg.sMale == "always") or (sGender == "female" and tCfg.sFemale == "always") then
+		return tCfg.sAction
+	end
+	local tGenes = self:_Genes(e.nID, e.bExhibit)
+	if tGenes == nil then
+		return "storage", "genes unknown: kept for breeding"
+	end
+	for _, sGene in ipairs(self.tGeneNames) do
+		if tGenes[sGene] < (tCfg.tMinGenes[sGene] or 0) then
+			return tCfg.sAction
+		end
+	end
+	return "storage", "good genes (" .. genesText(tGenes) .. "): kept for breeding"
+end
+
 local tDoneVerb = { storage = "sent", trade = "sold", release = "released" }
 
 -- "12,345" (rounded)
@@ -1400,7 +1662,12 @@ Logic._SendEntries = function(self, tEntries, bReport)
 		if not self:_IsHeld(e.nID) then
 			local sName, sWhy = self:_Name(e.nID), self:_Why(e)
 			local tCfg = e.tGroup and self:_Cfg(e.tGroup) or {}
-			local bSent, sErr, sNote, nValue = self:_Act(e.nID, e.bExhibit, tCfg.sAction or "storage", tCfg.bZeroToStorage)
+			local sAction, sKept = "storage", nil
+			if tCfg.sAction ~= nil then
+				sAction, sKept = self:_GeneDecision(e, tCfg)
+			end
+			local bSent, sErr, sNote, nValue = self:_Act(e.nID, e.bExhibit, sAction, tCfg.bZeroToStorage)
+			sNote = sNote or sKept
 			if bSent == nil then
 				nWaiting = nWaiting + 1
 			elseif bSent then
@@ -1562,6 +1829,11 @@ Logic._ContraGroup = function(self, tGroup, tAll)
 		if sKey ~= nil then
 			local sState = self.tContra[sKey]
 			local oWith, sWhy = self:_ContraRelative(f, tAnimals, self:_Cfg(tGroup).bSiblings)
+			if oWith ~= nil and self:_Cfg(tGroup).bGrownOnly and not self:_GrewUpHere(sKey) then
+				-- placed by the player: left to breed (contraception AutoHub
+				-- put on earlier comes off below)
+				oWith = nil
+			end
 			if oWith ~= nil then
 				if sState ~= "player" then
 					local bUsing = self:_UsingContra(f.nID, bExhibit)
@@ -1663,7 +1935,7 @@ Logic.SetAuto = function(self, vMode)
 	end
 	for _, sKind in ipairs(self.tKindNames) do
 		if self.tCfg[sKind].sMode ~= sMode then
-			-- "new" only counts transitions observed from now on
+			-- a new mode starts with a fresh check and no holds
 			self:Reset()
 			break
 		end
@@ -1689,9 +1961,12 @@ Logic.SetKinds = function(self, sKinds)
 end
 
 -- Every setting per kind, from the UI:
--- "habitat,1,always,1,0,trade,1;aquarium,...;exhibit,..." =
+-- "habitat,1,always,1,0,trade,1,1,50,50,50,0,a,g;aquarium,...;exhibit,..." =
 -- kind, on, auto mode, brother + sister, contraception, action, worth 0 ->
--- storage (left out: unchanged)
+-- storage, keep good genes, min Vitality / Longevity / Fertility /
+-- Immunity (percent), males, females ("a" always trade, "g" check genes),
+-- who leaves ("g" grown up here, "a" all related).
+-- Fields left out stay unchanged.
 Logic.SetKindCfg = function(self, sText)
 	local bReset = false
 	for sPart in string.gmatch(tostring(sText or ""), "[^;]+") do
@@ -1713,26 +1988,50 @@ Logic.SetKindCfg = function(self, sText)
 			if t[7] ~= nil then
 				tCfg.bZeroToStorage = t[7] == "1"
 			end
+			if t[8] ~= nil then
+				tCfg.bGenes = t[8] == "1"
+			end
+			for i, sGene in ipairs(self.tGeneNames) do
+				local n = tonumber(t[8 + i])
+				if n ~= nil then
+					tCfg.tMinGenes[sGene] = math.max(0, math.min(100, n))
+				end
+			end
+			if t[13] ~= nil then
+				tCfg.sMale = t[13] == "a" and "always" or "genes"
+			end
+			if t[14] ~= nil then
+				tCfg.sFemale = t[14] == "a" and "always" or "genes"
+			end
+			if t[15] ~= nil then
+				tCfg.bGrownOnly = t[15] == "g"
+			end
+			local nShoals = tonumber(t[16])
+			if nShoals ~= nil then
+				tCfg.nShoals = math.max(0, math.min(99, math.floor(nShoals)))
+			end
 		end
 	end
 	if bReset then
-		-- "new" only counts transitions observed from now on
+		-- a new mode starts with a fresh check and no holds
 		self:Reset()
 	end
 end
 
 -- What the tick has to do: bAuto (a switched-on kind has an auto mode),
--- bContra (a switched-on kind has contraception on).
+-- bContra (a switched-on kind has contraception on), bTrack (a switched-on
+-- kind uses "grown up here", whose bookkeeping needs the tick).
 Logic._Wanted = function(self)
-	local bAuto, bContra = false, false
+	local bAuto, bContra, bTrack = false, false, false
 	for _, sKind in ipairs(self.tKindNames) do
 		local tCfg = self.tCfg[sKind]
 		if tCfg.bOn then
 			bAuto = bAuto or tCfg.sMode ~= "off"
 			bContra = bContra or tCfg.bContra
+			bTrack = bTrack or tCfg.bGrownOnly
 		end
 	end
-	return bAuto, bContra
+	return bAuto, bContra, bTrack
 end
 
 -- the switched-on groups whose kind has auto mode sMode
@@ -1803,66 +2102,52 @@ Logic._ZooAnimals = function(self)
 end
 
 -- Groups whose kind is on "New adults". Returns the groups, nAnimals.
-Logic._TickNew = function(self)
-	local tZoo = self.tZoo or self:_RefreshMembers()
-	local tAnimals, tExhibit = tZoo.tAnimals, tZoo.tExhibit
+-- Every check looks at the adults seen as juveniles in their current group
+-- (tYoung, saved per park) and the relatives they pair with, until they
+-- are gone. So a grown-up missed by one check (park reloaded, storage full,
+-- refused) is tried again at a later one; holds pace the retries.
+Logic._TickNew = function(self, tEval)
 	local tGroups = self:_ModeGroups("new")
-	local function isNewMode(tGroup)
-		return tGroup ~= nil and self:_IsEnabled(tGroup) and self:_Cfg(tGroup).sMode == "new"
+	local nAnimals, nWaitingAll = 0, 0
+	local bStart = self.bStartCheck
+	if bStart then
+		self.nTreesLoading = 0
 	end
-	local nAnimals = 0
-	for _, nID in ipairs(tAnimals) do
-		if isNewMode(self.tMembers[nID]) then
-			nAnimals = nAnimals + 1
+	for _, tGroup in ipairs(tGroups) do
+		local tDone = tEval and tEval[groupName(tGroup)]
+		local tFound, tAll
+		if tDone then
+			tFound, tAll = tDone.tEntries, tDone.tAll
+		else
+			tFound, tAll = self:_EvaluateGroup(tGroup)
 		end
-	end
-	for _, nID in ipairs(tAnimals) do
-		if isNewMode(self.tMembers[nID]) then
-			local sStage = self:_StageOf(nID, tExhibit[nID])
-			if sStage == "juvenile" then
-				self.tWasJuvenile[nID] = true
-			elseif self.tWasJuvenile[nID] then
-				self.tWasJuvenile[nID] = nil
-				if sStage == "adult" then
-					self.tPending[nID] = self.nTick + self.nRetryTicks
-				end
+		nAnimals = nAnimals + #tAll
+		local tGrown = {}
+		for _, f in ipairs(tAll) do
+			if self:_GrewUpHere(f.sKey) then
+				tGrown[f.nID] = true
 			end
 		end
-	end
-	for nID, nUntil in pairs(self.tPending) do
 		local tMine = {}
-		-- where it lives now, from the fresh member lists (a gone animal is dropped)
-		local tGroup = self.tMembers and self.tMembers[nID]
-		if not isNewMode(tGroup) then
-			-- gone, or its kind is switched off / not on "New adults": forget it
-			tGroup = nil
-		end
-		if tGroup == nil then
-			self.tPending[nID] = nil
-		else
-			for _, e in ipairs((self:_EvaluateGroup(tGroup))) do
-				if e.nID == nID or e.nWith == nID then
-					tMine[#tMine + 1] = e
-				end
+		for _, e in ipairs(tFound) do
+			if bStart or tGrown[e.nID] or (e.nWith ~= nil and tGrown[e.nWith]) then
+				tMine[#tMine + 1] = e
 			end
 		end
-		if tGroup == nil then
-			-- left its habitat/vivarium meanwhile: nothing to do
-		elseif #tMine == 0 then
-			self.tPending[nID] = nil
-			log(self:_Name(nID) .. " grew up, no relatives where it lives")
-		else
-			local _, nFailed, tNotes, nWaiting = self:_SendEntries(tMine, true)
-			if nWaiting > 0 then
-				-- still pending: tried again at the next check
-			elseif nFailed == 0 then
-				self.tPending[nID] = nil
-			elseif self.nTick >= nUntil then
-				self.tPending[nID] = nil
-				for _, s in ipairs(tNotes) do
-					log("gave up: " .. s)
-				end
+		if #tMine > 0 then
+			local _, _, tNotes, nWaiting = self:_SendEntries(tMine, true)
+			nWaitingAll = nWaitingAll + nWaiting
+			for _, s in ipairs(tNotes) do
+				log("not sent yet: " .. s)
 			end
+		end
+	end
+	if bStart and #tGroups > 0 then
+		self.nStartTry = self.nStartTry + 1
+		local bLoading = nAnimals == 0 or (self.nTreesLoading or 0) > 0 or nWaitingAll > 0
+		if not bLoading or self.nStartTry >= self.nStartTries then
+			self.bStartCheck = false
+			log("park opened: checked all " .. nAnimals .. " animals on New adults")
 		end
 	end
 	return tGroups, nAnimals
@@ -1882,8 +2167,8 @@ end
 -- and no exhibit call may follow on it (see CRASH WARNING above).
 Logic.Tick = function(self)
 	self.nTickEvents = self.nTickEvents + 1
-	local bAuto, bContra = self:_Wanted()
-	if not (bAuto or bContra) or not self.bParkLive then
+	local bAuto, bContra, bTrack = self:_Wanted()
+	if not (bAuto or bContra or bTrack) or not self.bParkLive then
 		return
 	end
 	self.nTick = self.nTick + 1
@@ -1891,15 +2176,28 @@ Logic.Tick = function(self)
 		return
 	end
 	self.nLastCheck = self.nTick
+	local nCalls = self.nCalls
+	self.tFactsNow = {}
+	local bOk, sErr = pcall(self._Check, self, bAuto, bContra)
+	self.tFactsNow = nil
+	self.nCheckCalls = self.nCalls - nCalls
+	if not bOk then
+		log("check failed: " .. tostring(sErr))
+	end
+end
+
+Logic._Check = function(self, bAuto, bContra)
 	self:_RefreshMembers()
 	self:_ReleaseHolds()
+	self:_PruneStatic()
+	self:_TrackYoung()
 	local tEval = nil
 	if bContra then
 		tEval = self:_TickContra()
 	end
 	if bAuto then
 		local tAlways, nAlways, nSent = self:_TickAlways(tEval)
-		local tNew, nNew = self:_TickNew()
+		local tNew, nNew = self:_TickNew(tEval)
 		local tGroups = {}
 		for _, g in ipairs(tAlways) do
 			tGroups[#tGroups + 1] = g
@@ -1909,6 +2207,16 @@ Logic.Tick = function(self)
 		end
 		local nHabitats, nExhibits, nAquariums = countKinds(tGroups)
 		toUI("PZ2AutoHub_AutoStatus", nHabitats, nAlways + nNew, nSent, nExhibits, nAquariums)
+	end
+end
+
+-- tStatic: expired entries and animals not seen for nForgetSeconds
+Logic._PruneStatic = function(self)
+	local n = now()
+	for sKey, tC in pairs(self.tStatic) do
+		if n >= tC.nUntil or n < tC.nAt or n - tC.nSeen > self.nForgetSeconds then
+			self.tStatic[sKey] = nil
+		end
 	end
 end
 
@@ -1966,6 +2274,16 @@ end
 
 -- Writes what the game returns for the panel's group to the UI log.
 Logic.Diagnose = function(self, sIDs, sPanelID)
+	-- what the game says now, not the cache
+	self.bNoCache = true
+	local bOk, sErr = pcall(self._Diagnose, self, sIDs, sPanelID)
+	self.bNoCache = false
+	if not bOk then
+		log("Diagnose failed: " .. tostring(sErr))
+	end
+end
+
+Logic._Diagnose = function(self, sIDs, sPanelID)
 	-- habitat animals: what Quick Trade / Release would bring now, and
 	-- whether the game has the animal's data loaded (see _Value)
 	local function valuesText(nID)
@@ -2025,12 +2343,15 @@ Logic.Diagnose = function(self, sIDs, sPanelID)
 	log("auto" .. (self.bParkLive and "" or " (paused: park closing)") .. ": every " .. self.nEvery .. " s, ticks: " .. self.nTick
 		.. " (received " .. self.nTickEvents .. ", last check at " .. tostring(self.nLastCheck) .. ")"
 		.. ", habitats: " .. nHabitats .. ", aquariums: " .. nAquariums .. ", vivariums: " .. nExhibits
-		.. ", animals: " .. #tZoo)
+		.. ", animals: " .. #tZoo .. ", game calls last check: " .. tostring(self.nCheckCalls or "-"))
 	for _, sKind in ipairs(self.tKindNames) do
 		local c = self.tCfg[sKind]
 		log(sKind .. ": " .. (c.bOn and "on" or "OFF") .. ", auto " .. c.sMode .. ", brother + sister "
 			.. tostring(c.bSiblings) .. ", contraception " .. tostring(c.bContra) .. ", action " .. self.tActionNames[c.sAction]
-			.. ", worth 0 -> " .. (c.bZeroToStorage and "storage" or "anyway"))
+			.. ", worth 0 -> " .. (c.bZeroToStorage and "storage" or "anyway")
+			.. ", keep good genes " .. tostring(c.bGenes) .. " (min " .. genesText(c.tMinGenes) .. "; males " .. c.sMale
+			.. ", females " .. c.sFemale .. "), who leaves: " .. (c.bGrownOnly and "grown up here" or "all related")
+			.. ", shoals per species: " .. (c.nShoals == 0 and "no limit" or tostring(c.nShoals)))
 	end
 	log("animal moves allowed by the game (planetHub): " .. tostring(movementEnabled()))
 	local nOnKeys, nPlayerKeys = 0, 0
@@ -2069,11 +2390,13 @@ Logic.Diagnose = function(self, sIDs, sPanelID)
 				table.sort(tKeys)
 				local oWith = self:_ContraRelative(f, tNoShoals, self:_Cfg(tGroup).bSiblings)
 				local sMine = f.sKey and self.tContra[f.sKey]
-				log(string.format("#%s %s (%s): %s %s, guid %s, parents [%s]%s, contraception %s%s%s%s", tostring(f.nID),
+				log(string.format("#%s %s (%s): %s %s, guid %s, parents [%s]%s, contraception %s%s%s%s, genes %s%s", tostring(f.nID),
 					self:_Name(f.nID), tostring(f.sSpecies), tostring(f.sStage), tostring(f.sGender), tostring(f.sKey),
 					table.concat(tKeys, " "), f.sTree and (", family tree " .. f.sTree) or "",
 					tostring(self:_UsingContra(f.nID, bGroupExhibit)), sMine and (" (" .. sMine .. ")") or "",
-					oWith and (", needs it: with " .. self:_Name(oWith.nID)) or "", bGroupExhibit and "" or valuesText(f.nID)))
+					oWith and (", needs it: with " .. self:_Name(oWith.nID)) or "", bGroupExhibit and "" or valuesText(f.nID),
+					(function() local t = self:_Genes(f.nID, bGroupExhibit) return t and genesText(t) or "unknown" end)(),
+					self:_Cfg(tGroup).bGrownOnly and (", grew up here " .. (self:_GrewUpHere(f.sKey) and "yes" or "no (placed)")) or ""))
 			end
 		end
 		if #tEntries == 0 then

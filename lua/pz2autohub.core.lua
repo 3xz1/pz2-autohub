@@ -33,7 +33,7 @@ local math      = global.math
 
 local Core = module(...)
 
-Core.sVersion = "1.4.2"
+Core.sVersion = "1.7.0"
 Core.bBooted = false
 
 Core.sOverlayName = "PZ2AutoHubUI"
@@ -431,6 +431,7 @@ Core._OnHUDReady = function(self, oUI)
 		guarded("PZ2AutoHub_SetInterval", 1, function(Logic, nSeconds) Logic:SetInterval(nSeconds) end)
 		guarded("PZ2AutoHub_SetContra", 1, function(Logic, bOn) Logic:SetContra(bOn) end)
 		guarded("PZ2AutoHub_SetContraKeys", 1, function(Logic, sList) Logic:SetContraKeys(sList) end)
+		guarded("PZ2AutoHub_SetYoungKeys", 1, function(Logic, sList) Logic:SetYoungKeys(sList) end)
 		guarded("PZ2AutoHub_Tick", 1, function(Logic) Logic:Tick() end)
 		guarded("PZ2AutoHub_SendFromHabitat", 2, function(Logic, sIDs, sPanelID) Logic:SendFromHabitat(sIDs, sPanelID) end)
 		guarded("PZ2AutoHub_CheckAll", 1, function(Logic) Logic:CheckAll() end)
@@ -452,6 +453,9 @@ Core._OnHUDReady = function(self, oUI)
 	local Logic = logic()
 	if Logic and Logic.SetParkLive then
 		pcall(Logic.SetParkLive, Logic, true)
+	end
+	if Logic and Logic.StartPark then
+		pcall(Logic.StartPark, Logic)
 	end
 	-- the saved settings go with the hello, so the page has them before it
 	-- hands its settings to Lua

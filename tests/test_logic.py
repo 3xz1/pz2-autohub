@@ -114,8 +114,10 @@ function A:GetAnimalsInPark(listType)
   local t = {} for id, a in pairs(animals) do if a.hab ~= 0 then t[#t+1] = id end end table.sort(t) return t
 end
 -- as in the game: CanSend answers false for exhibit animals (both entities)
+-- refuseSend: the game refuses every habitat animal (storage full)
+refuseSend = false
 function A:CanSendAnimalToTradeCentre(id)
-  if id > 20000 then return false end
+  if id > 20000 or refuseSend then return false end
   local a = animals[id]
   if a.ex then return false end
   return a.hab ~= 0
@@ -239,6 +241,14 @@ function FR:RequestAnimalData(guid) dataRequests[#dataRequests + 1] = guid; if n
 function deliverData() for _, g in ipairs(dataRequests) do dataLoaded[g] = true end end
 function X:GetExhibitAnimalSellValueUID(uid) return 75 end
 zeroExhibitValue = false
+-- genes (GetGeneticGrades): animal.genes = { nSize, nLongevity, nFertility, nImmunity }
+-- (0-1 like the game; noGenes = the game gives nothing); default 0.4 each
+local function genesOf(a)
+  if a.noGenes then return nil end
+  return a.genes or { nSize = 0.4, nLongevity = 0.4, nFertility = 0.4, nImmunity = 0.4 }
+end
+function A:GetGeneticGrades(id) local a = animals[id]; if a.ex then error("not a habitat animal") end return genesOf(a) end
+function X:GetExhibitAnimalUIDGeneticGrades(uid) local a = animals[uid - 1000]; return a and genesOf(a) end
 function X:GetAnimalReleaseValue(uid) if zeroExhibitValue then return 0 end return 30 end
 movesOn = true
 api = { world = { GetWorldAPIs = function() return { animals = A, habitat = H, facilities = F, exhibits = X, park = P, franchise = FR } end },
@@ -311,14 +321,14 @@ reset_sent()
 lua.execute('Logic:SendFromHabitat("", "600")')
 check("aquarium: only the older Clownfish shoal leaves", sent(), [40])
 check("aquarium: reason names the kept shoal", ui_events("PZ2AutoHub_Result")[-1][2],
-      "sent [STRING_LITERAL:Value=|Animal40|] (older shoal, keeping [STRING_LITERAL:Value=|Animal41|])")
+      "sent [STRING_LITERAL:Value=|Animal40|] (older Clownfish shoal, keeping [STRING_LITERAL:Value=|Animal41|])")
 
 # 2e. Vivarium tank with shoals: older Guppy shoal leaves, single Neon shoal stays
 reset_sent()
 lua.execute('Logic:SendFromHabitat("", "510")')
 check("vivarium: only the older Guppy shoal leaves", sent(), [50])
 check("vivarium: result names the shoals (no 'ANIMAL BRAIN' error)", ui_events("PZ2AutoHub_Result")[-1][2],
-      "sent [STRING_LITERAL:Value=|Animal50|] (older shoal, keeping [STRING_LITERAL:Value=|Animal51|])")
+      "sent [STRING_LITERAL:Value=|Animal50|] (older Guppy shoal, keeping [STRING_LITERAL:Value=|Animal51|])")
 
 # 2f. Vivarium storage at the Trade Centre full: nothing sent, reason given
 reset_sent()
@@ -392,11 +402,79 @@ lua.execute('animals[16].hab = 0; animals[43] = {hab=600, age="A", sex="u", spec
 lua.execute('Logic:SetAuto("off"); Logic:SetAuto("always"); Logic:Tick()')
 check("always: shoal split -> older Clownfish shoal leaves", sent(), [41])
 
+# 5e2. Shoals per species (per kind): the youngest N of one species stay,
+#      other species don't count, 0 = no limit
+lua.execute("""
+Logic:SetAuto("off")
+for id, a in pairs(animals) do if a.hab == 600 then a.hab = 0 end end
+animals[90] = {hab=600, age="A", sex="u", species="Clownfish", boid=true, gameAge=6, parents={0, 0}}
+animals[91] = {hab=600, age="A", sex="u", species="Clownfish", boid=true, gameAge=4, parents={0, 0}}
+animals[92] = {hab=600, age="A", sex="u", species="Clownfish", boid=true, gameAge=2, parents={0, 0}}
+animals[93] = {hab=600, age="A", sex="u", species="Tang", boid=true, gameAge=9, parents={0, 0}}
+""")
+def shoals_run(n):
+    lua.execute('for _, id in ipairs({90, 91, 92, 93}) do animals[id].hab = 600 end; Logic.tHold = {}')
+    lua.execute(f'Logic:SetKindCfg("aquarium,1,off,1,0,storage,1,0,0,0,0,0,g,g,a,{n}")')
+    reset_sent()
+    lua.execute('Logic:SendFromHabitat("", "600")')
+    return sorted(sent())
+check("shoals 1: the two older Clownfish shoals leave, the Tang stays", shoals_run(1), [90, 91])
+check("shoals: reason names the species", "older Clownfish shoal" in str(ui_events("PZ2AutoHub_Result")[-1][2]), True)
+check("shoals 2: only the oldest Clownfish shoal leaves", shoals_run(2), [90])
+check("shoals 3: all stay", shoals_run(3), [])
+check("shoals 0 (no limit): all stay", shoals_run(0), [])
+check("shoals: setting per kind", [lua.eval("Logic.tCfg.aquarium.nShoals"), lua.eval("Logic.tCfg.exhibit.nShoals")], [0, 1])
+lua.execute('Logic:SetKindCfg("aquarium,1,off,1,0,storage,1,0,0,0,0,0,g,g,a,1")')
+lua.execute('for _, id in ipairs({90, 91, 92, 93}) do animals[id] = nil end')
+
 # 5f. New adults: vivarium infant grows up next to its mother -> leaves
 reset_sent()
 lua.execute('Logic:SetAuto("new"); Logic:Tick()')
 lua.execute('animals[32].q = 1; Logic:Tick()')
 check("new: vivarium daughter grows up next to mother -> leaves", sent(), [32])
+
+# 5f2. New adults: a grown-up missed when it grew up (park reloaded) is
+#      still caught at a later check
+reset_sent()
+lua.execute('animals[19] = {hab=300, age="J", sex="f", parents={14, 0}}; animals[14].hab = 300; Logic:Tick()')
+check("new: juvenile remembered by GUID", lua.eval('Logic.tYoung["1019"]'), True)
+lua.execute('Logic:SetParkLive(false); animals[19].age = "A"; Logic:SetParkLive(true); Logic:Tick()')
+check("new: grew up while the park reloaded -> still sent", sent(), [19])
+
+# 5f3. New adults: refused for longer than 5 minutes (storage full) -> keeps
+#      trying, sent once the game allows it
+reset_sent()
+lua.execute('animals[20] = {hab=300, age="J", sex="m", parents={14, 0}}; Logic:Tick(); Logic:Tick()')
+lua.execute('refuseSend = true; animals[20].age = "A"; for i = 1, 400 do Logic:Tick() end')
+check("new: refused -> nothing sent", sent(), [])
+lua.execute('refuseSend = false; for i = 1, 70 do Logic:Tick() end')
+check("new: refused for 6+ minutes, then allowed -> sent", sent(), [20])
+lua.execute('animals[19].hab = 0; animals[20].hab = 0')
+
+# 5f4. New adults: when a park opens, everyone is checked once (adults that
+#      grew up before AutoHub saw them as juveniles); after that only new ones
+reset_sent()
+lua.execute('animals[21] = {hab=300, age="A", sex="f", parents={14, 0}}; for i = 1, 6 do Logic:Tick() end')
+check("new: unknown adult next to her father is left alone", sent(), [])
+lua.execute('Logic:SetParkLive(false); Logic:SetParkLive(true); Logic:Tick()')
+check("new: park opened -> checked once, she leaves", sent(), [21])
+check("new: park-open check is done", lua.eval("Logic.bStartCheck"), False)
+lua.execute('animals[21].hab = 300; Logic.tHold = {}; for i = 1, 6 do Logic:Tick() end')
+check("new: after the park-open check, only grown-up animals again", sent(), [21])
+lua.execute('animals[21].hab = 0')
+
+# 5f5. Performance: sex and parents are cached by GUID, the next check makes
+#      far fewer game calls; Diagnose reads fresh
+lua.execute('Logic.tStatic = {}; Logic.nLastCheck = nil; Logic:Tick()')
+first = lua.eval("Logic.nCheckCalls")
+lua.execute('Logic.nLastCheck = nil; Logic:Tick()')
+check("cache: second check needs far fewer game calls", lua.eval("Logic.nCheckCalls") < first * 0.6, True)
+lua.execute('clock = (clock or 0) + 300; Logic.nLastCheck = nil; Logic:Tick()')
+check("cache: GUID parents kept while the animal is seen", lua.eval("Logic.nCheckCalls") < first * 0.6, True)
+lua.execute('Logic.tStatic["1999"] = {nAt = (clock or 0) - 1000, nSeen = (clock or 0) - 700, nUntil = math.huge, tParentKeys = {}}; Logic.nLastCheck = nil; Logic:Tick()')
+check("cache: animal not seen for 10 minutes forgotten", lua.eval('Logic.tStatic["1999"]'), None)
+lua.execute('clock = (clock or 0) - 500; Logic.nLastCheck = nil; Logic:Tick()')
+check("cache: clock went back -> read again", lua.eval("Logic.nCheckCalls") > first * 0.8, True)
 
 # 5g. The crash case: Always mode sends a vivarium shoal, its ID is gone,
 #     the following checks must not ask exhibit APIs about it
@@ -663,6 +741,67 @@ lua.execute('animals[121].lazy = nil; dataDelay = false; clock = 0')
 lua.execute('Logic:SetKindCfg("habitat,1,off,1,0,release;aquarium,1,off,1,0,storage;exhibit,1,off,1,0,release")')
 lua.execute('animals[121].hab = 700; animals[122].hab = 700')
 
+# keep good genes: animals that have to leave are kept in storage when
+# their genes reach every limit, the others are sold
+lua.execute("""
+animals[121].hab = 700; animals[122].hab = 700
+animals[121].genes = { nSize = 0.62, nLongevity = 0.55, nFertility = 0.7, nImmunity = 0.1 }
+animals[122].genes = { nSize = 0.62, nLongevity = 0.55, nFertility = 0.3, nImmunity = 0.9 }
+Logic.tValueWait = {}
+""")
+lua.execute('Logic:SetKindCfg("habitat,1,off,1,0,trade,1,1,50,50,50,0,g,g;aquarium,1,off,1,0,storage;exhibit,1,off,1,0,trade")')
+check("genes config: limits", [lua.eval(f"Logic.tCfg.habitat.tMinGenes.{g}") for g in ("Size", "Longevity", "Fertility", "Immunity")], [50, 50, 50, 0])
+check("genes config: on", lua.eval("Logic.tCfg.habitat.bGenes"), True)
+reset_moves()
+lua.execute('Logic:SendFromHabitat("", "700")')
+check("good genes: kept in storage", moved("sent"), [121])
+check("low fertility: sold", moved("sold"), [122])
+notes = str(ui_events("PZ2AutoHub_Result")[-1][2])
+check("good genes: note with the values", "good genes (Vitality 62, Longevity 55, Fertility 70, Immunity 10): kept for breeding" in notes, True)
+# males always sold: the good male goes too
+lua.execute('animals[121].hab = 700; animals[122].hab = 700')
+lua.execute('Logic:SetKindCfg("habitat,1,off,1,0,trade,1,1,50,50,50,0,a,g;aquarium,1,off,1,0,storage;exhibit,1,off,1,0,trade")')
+check("genes config: males always", lua.eval("Logic.tCfg.habitat.sMale"), "always")
+reset_moves()
+lua.execute('Logic:SendFromHabitat("", "700")')
+check("males always: both sold", moved("sold"), [121, 122])
+# genes unknown: kept (safe side)
+lua.execute('animals[121].hab = 700; animals[122].hab = 700; animals[122].noGenes = true')
+reset_moves()
+lua.execute('Logic:SendFromHabitat("", "700")')
+check("genes unknown: kept", moved("sent"), [122])
+lua.execute('animals[122].noGenes = nil')
+# percent scale (values above 1) works the same
+lua.execute('animals[121].hab = 700; animals[122].hab = 700; animals[122].genes = { nSize = 80, nLongevity = 80, nFertility = 80, nImmunity = 80 }')
+reset_moves()
+lua.execute('Logic:SendFromHabitat("", "700")')
+check("percent scale: good female kept", moved("sent"), [122])
+# switched off: everyone is sold as before
+lua.execute('animals[121].hab = 700; animals[122].hab = 700')
+lua.execute('Logic:SetKindCfg("habitat,1,off,1,0,trade,1,0;aquarium,1,off,1,0,storage;exhibit,1,off,1,0,trade")')
+reset_moves()
+lua.execute('Logic:SendFromHabitat("", "700")')
+check("genes off: all sold", moved("sold"), [121, 122])
+check("genes off: limits kept", lua.eval("Logic.tCfg.habitat.tMinGenes.Fertility"), 50)
+# vivarium genes (by UID); the fake reuses IDs 69-71 with new parents
+# (real GUIDs are never reused), so the remembered facts go
+lua.execute("""
+Logic.tStatic = {}
+animals[69] = {hab=0, ex=500, q=2, sex="f", parents={0, 0}}
+animals[70] = {hab=0, ex=500, q=1, sex="f", parents={69, 0}, genes = { nSize = 0.9, nLongevity = 0.9, nFertility = 0.9, nImmunity = 0.9 }}
+animals[71] = {hab=0, ex=500, q=1, sex="m", parents={69, 0}}
+""")
+lua.execute('Logic:SetKindCfg("habitat,1,off,1,0,trade,1,0;aquarium,1,off,1,0,storage;exhibit,1,off,0,0,trade,1,1,50,50,50,0,g,g")')
+reset_moves()
+lua.execute('engineCrashes = 0; Logic:SendFromHabitat("", "500")')
+check("vivarium genes: good one kept", 70 in moved("sent") and 70 not in moved("sold"), True)
+check("vivarium genes: weak one sold", 71 in moved("sold"), True)
+check("vivarium genes: no engine crash", lua.eval("engineCrashes"), 0)
+for i in (69, 70, 71):
+    lua.execute(f'animals[{i}] = nil')
+lua.execute('animals[121].genes = nil; animals[122].genes = nil; animals[121].hab = 700; animals[122].hab = 700')
+lua.execute('Logic:SetKindCfg("habitat,1,off,1,0,release,1,0;aquarium,1,off,1,0,storage;exhibit,1,off,1,0,release,1,0")')
+
 # vivarium: release by UID, sale from the exhibit
 lua.execute("""
 animals[60] = {hab=0, ex=500, q=2, sex="f", parents={0, 0}}
@@ -730,6 +869,52 @@ check("contraception per kind: vivarium newborn untouched", lua.eval("animals[65
 for i in list(range(120, 124)) + list(range(60, 67)):
     lua.execute(f'animals[{i}] = nil')
 lua.execute('Logic:SetKindCfg("habitat,1,off,1,0,storage;aquarium,1,off,1,0,storage;exhibit,1,off,1,0,storage")')
+
+# 9. "Who leaves: grown up here": adults the player placed stay, animals
+# that grew up in the habitat leave
+lua.execute("""
+Logic.tYoung = {}; Logic.tSeenIn = {}; Logic.tYoungMiss = {}; Logic.tHold = {}; Logic.tPending = {}
+Logic:SetContraKeys("")
+animals[130] = {hab=700, age="A", sex="f", parents={0, 0}}       -- placed mother
+animals[131] = {hab=700, age="A", sex="m", parents={130, 0}}     -- placed adult son
+animals[132] = {hab=700, age="J", sex="f", parents={130, 0}}     -- daughter born here
+""")
+lua.execute('Logic:SetKindCfg("habitat,1,always,1,1,storage,1,0,0,0,0,0,g,g,g;aquarium,1,off,1,0,storage;exhibit,1,off,1,0,storage")')
+check("grown up here: config", lua.eval("Logic.tCfg.habitat.bGrownOnly"), True)
+reset_moves()
+lua.execute('Logic:Tick(); Logic:Tick()')
+check("grown up here: placed son stays with his mother", 131 in moved("sent"), False)
+check("grown up here: young daughter remembered", lua.eval('Logic.tYoung["1132"]'), True)
+young = ui_events("PZ2AutoHub_YoungKeys")
+check("grown up here: list goes to the UI", bool(young) and "1132" in str(young[-1][0]), True)
+check("grown up here: young daughter gets contraception", lua.eval("animals[132].contra"), True)
+check("grown up here: placed son gets none", lua.eval("animals[131].contra"), None)
+lua.execute('animals[132].age = "A"; Logic:Tick(); Logic:Tick()')
+check("grown up here: grown daughter leaves", 132 in moved("sent"), True)
+check("grown up here: her placed brother stays", 131 in moved("sent"), False)
+# "all related" (the old way): the placed son leaves too
+lua.execute('animals[132].hab = 700; Logic.tHold = {}')
+lua.execute('Logic:SetKindCfg("habitat,1,always,1,0,storage,1,0,0,0,0,0,g,g,a;aquarium,1,off,1,0,storage;exhibit,1,off,1,0,storage")')
+reset_moves()
+lua.execute('Logic:Tick(); Logic:Tick()')
+check("all related: placed son leaves", 131 in moved("sent"), True)
+# the saved list comes back from the UI
+lua.execute('Logic:SetYoungKeys("1132,1999")')
+check("saved list restored", [lua.eval('Logic.tYoung["1132"]'), lua.eval('Logic.tYoung["1999"]')], [True, True])
+# moved to another habitat as an adult: placed there, forgotten
+lua.execute("""
+animals[131].hab = 700; animals[132].hab = 700; Logic.tHold = {}
+Logic:SetKindCfg("habitat,1,always,1,0,storage,1,0,0,0,0,0,g,g,g;aquarium,1,off,1,0,storage;exhibit,1,off,1,0,storage")
+""")
+reset_moves()
+lua.execute('animals[132].hab = 200; Logic:Tick()')
+check("moved as an adult: forgotten", lua.eval('Logic.tYoung["1132"]'), None)
+# gone (sent away, in storage): forgotten after a few passes
+lua.execute('for i = 1, 4 do Logic:Tick() end')
+check("gone: unknown key forgotten", lua.eval('Logic.tYoung["1999"]'), None)
+for i in (130, 131, 132):
+    lua.execute(f'animals[{i}] = nil')
+lua.execute('Logic.tYoung = {}; Logic.tSeenIn = {}; Logic:SetKindCfg("habitat,1,off,1,0,storage,1,0,0,0,0,0,g,g,a;aquarium,1,off,1,0,storage;exhibit,1,off,1,0,storage")')
 
 # crash 2026-10-18: GetAnimalsInExhibit on exhibit 520 (listed by
 # GetAllExhibits, but EntityIsExhibit says no) crashed the engine
