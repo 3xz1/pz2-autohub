@@ -27,7 +27,7 @@ import { DataStoreCollection } from '/js/common/data/DataStoreCollection.js';
 import { loadCSS } from '/js/common/util/CSSUtil.js';
 import { addPauseMenuEntry, refreshPauseMenu } from './pausemenu.js';
 
-const VERSION = '1.4.2';
+const VERSION = '1.7.0';
 const MODE_KEY = 'PZ2AutoHub.mode';
 const OLD_AUTO_KEY = 'PZ2AutoHub.auto';
 const SIBLINGS_KEY = 'PZ2AutoHub.siblings';
@@ -40,9 +40,15 @@ const CONTRA_KEYS_PREFIX = 'PZ2AutoHub.contraKeys.';
 // what Quick Trade / Quick Release brought, per park: 'PZ2AutoHub.earned.<park>'
 // = JSON { habitat: { trade: { n, sum, unknown }, release: {...} }, aquarium: ..., exhibit: ... }
 const EARNED_PREFIX = 'PZ2AutoHub.earned.';
+// animals seen growing up where they live ("grown up here"), per park: 'PZ2AutoHub.young.<park>'
+const YOUNG_PREFIX = 'PZ2AutoHub.young.';
 const SHOW_BTN_KEY = 'PZ2AutoHub.screenButton';
 // every setting per kind (JSON { habitat: { on, mode, siblings, contra, action, zero }, ... };
-// zero: an animal worth 0 goes to Animal Storage instead of Quick Trade / Release);
+// zero: an animal worth 0 goes to Animal Storage instead of Quick Trade / Release;
+// genes: keep animals whose genes reach every limit in min (percent) in Animal Storage,
+// male / female: 'genes' (checked) | 'always' (traded / released without a check);
+// grown: "Who leaves: grown up here", only animals seen growing up in the group leave;
+// shoals: shoals of one species a tank may keep, 0 = no limit);
 // MODE_KEY, SIBLINGS_KEY, KINDS_KEY and CONTRA_KEY (1.2 and older, one set for
 // all kinds) are only read as its starting values
 const KIND_CFG_KEY = 'PZ2AutoHub.kindCfg';
@@ -55,6 +61,11 @@ const VIEW_LABELS = { overview: 'Overview', settings: 'Settings', log: 'Log' };
 const ACTIONS = ['storage', 'trade', 'release'];
 const ACTION_LABELS = { storage: 'Animal Storage', trade: 'Quick Trade', release: 'Quick Release' };
 const ACTION_SHORT = { storage: 'Storage', trade: 'Quick Trade', release: 'Quick Release' };
+// the game's four gene values (Lua sends them in this order; "Size" shows as Vitality in the game)
+const GENES = ['Size', 'Longevity', 'Fertility', 'Immunity'];
+const GENE_LABELS = { Size: 'Vitality', Longevity: 'Longevity', Fertility: 'Fertility', Immunity: 'Immunity' };
+const GENE_STEP = 5;
+const MAX_SHOALS = 10;     // shoals per species: 1..MAX_SHOALS, then 0 = no limit
 const ACTION_TIPS = {
     storage: 'A keeper carries them to Animal Storage. You can bring them back later.',
     trade: 'Sold at once. If the game doesn\'t allow it, Animal Storage (the log says why).',
@@ -78,7 +89,7 @@ const MODES = ['off', 'new', 'always'];
 const MODE_LABELS = { off: 'Off', new: 'New adults', always: 'Always' };
 const MODE_TIPS = {
     off: 'Only "Check" below moves animals out.',
-    new: 'When an animal grows up next to a parent or an opposite-sex sibling, it (and that sibling) leaves.',
+    new: 'When an animal grows up next to a parent or an opposite-sex sibling, it (and that sibling) leaves. Everyone is checked once when a park opens.',
     always: 'At every check, everyone who has to leave goes, no matter when they grew up or moved in.',
 };
 const TICK_MS = 1000;      // Lua counts these; it checks every `interval` of them
@@ -171,7 +182,7 @@ function flushStore() {
     // too big: the other parks' contraception lists and earnings go first
     for (const key of Object.keys(kept)) {
         if (text.length <= STORE_CAP) break;
-        const perPark = [CONTRA_KEYS_PREFIX, EARNED_PREFIX].find(p => key.startsWith(p));
+        const perPark = [CONTRA_KEYS_PREFIX, EARNED_PREFIX, YOUNG_PREFIX].find(p => key.startsWith(p));
         if (perPark && key != perPark + parkKey) {
             delete kept[key];
             text = asciiJson(kept);
@@ -218,7 +229,7 @@ function applyStore(text, status) {
         if (v != null) kept[key] = v;
     }
     if (parkKey) {
-        for (const prefix of [CONTRA_KEYS_PREFIX, EARNED_PREFIX]) {
+        for (const prefix of [CONTRA_KEYS_PREFIX, EARNED_PREFIX, YOUNG_PREFIX]) {
             const v = readSetting(prefix + parkKey, null);
             if (v != null) kept[prefix + parkKey] = v;
         }
@@ -310,6 +321,12 @@ function oldKindCfg() {
             contra: readSetting(CONTRA_KEY, 'false') === 'true',
             action: 'storage',
             zero: true,
+            genes: false,
+            min: { Size: 0, Longevity: 0, Fertility: 0, Immunity: 0 },
+            male: 'genes',
+            female: 'genes',
+            grown: false,
+            shoals: 1,
         };
     }
     return t;
@@ -329,6 +346,15 @@ function readKindCfg() {
                 if (typeof s.contra == 'boolean') t[k].contra = s.contra;
                 if (ACTIONS.includes(s.action)) t[k].action = s.action;
                 if (typeof s.zero == 'boolean') t[k].zero = s.zero;
+                if (typeof s.genes == 'boolean') t[k].genes = s.genes;
+                for (const g of GENES) {
+                    const n = s.min && Number(s.min[g]);
+                    if (n >= 0 && n <= 100) t[k].min[g] = n;
+                }
+                if (s.male == 'genes' || s.male == 'always') t[k].male = s.male;
+                if (s.female == 'genes' || s.female == 'always') t[k].female = s.female;
+                if (typeof s.grown == 'boolean') t[k].grown = s.grown;
+                if (typeof s.shoals == 'number' && s.shoals % 1 === 0 && s.shoals >= 0 && s.shoals <= MAX_SHOALS) t[k].shoals = s.shoals;
             }
         }
     }
@@ -347,7 +373,9 @@ function readTab() {
 function sendKindCfg() {
     send('PZ2AutoHub_SetKindCfg', KINDS.map(k => {
         const c = kindCfg[k];
-        return [k, c.on ? 1 : 0, c.mode, c.siblings ? 1 : 0, c.contra ? 1 : 0, c.action, c.zero ? 1 : 0].join(',');
+        return [k, c.on ? 1 : 0, c.mode, c.siblings ? 1 : 0, c.contra ? 1 : 0, c.action, c.zero ? 1 : 0,
+            c.genes ? 1 : 0, ...GENES.map(g => c.min[g]), c.male == 'always' ? 'a' : 'g', c.female == 'always' ? 'a' : 'g',
+            c.grown ? 'g' : 'a', c.shoals].join(',');
     }).join(';'));
 }
 
@@ -363,6 +391,11 @@ function anyAuto() {
 
 function anyContra() {
     return KINDS.some(k => kindCfg[k].on && kindCfg[k].contra);
+}
+
+// "grown up here" needs the tick for its bookkeeping
+function anyGrown() {
+    return KINDS.some(k => kindCfg[k].on && kindCfg[k].grown);
 }
 
 function kindsText() {
@@ -716,8 +749,8 @@ function renderOverview() {
         const row = el('div', 'PZ2AH_row table' + (c.on ? '' : ' off'));
         row.appendChild(el('div', 'PZ2AH_cell head', KIND_LABELS[k]));
         if (c.on) {
-            row.appendChild(el('div', 'PZ2AH_cell', MODE_LABELS[c.mode]));
-            row.appendChild(el('div', 'PZ2AH_cell', ACTION_LABELS[c.action]));
+            row.appendChild(el('div', 'PZ2AH_cell', MODE_LABELS[c.mode] + (c.grown ? ' · grown here' : '')));
+            row.appendChild(el('div', 'PZ2AH_cell', ACTION_LABELS[c.action] + (c.genes && c.action != 'storage' ? ' + genes' : '')));
             row.appendChild(el('div', 'PZ2AH_cell', c.contra ? 'On' : 'Off'));
         }
         else row.appendChild(el('div', 'PZ2AH_cell wide', 'not looked after'));
@@ -791,11 +824,43 @@ function renderSettings() {
         'Off: AutoHub leaves these alone. "Check the open habitat" still works.');
     if (c.on) {
         settingRow('Auto', choice(MODES, MODE_LABELS, c.mode, v => set('mode', v)), MODE_TIPS[c.mode]);
+        settingRow('Who leaves', choice([false, true], { false: 'All related', true: 'Grown up here' }, c.grown, v => set('grown', v)),
+            c.grown ? 'Only animals AutoHub saw growing up here leave. Adults you place here stay, also next to their family, and get no contraception.'
+                : 'Every related adult leaves, also ones you placed here yourself.');
         settingRow('Action', choice(ACTIONS, ACTION_SHORT, c.action, v => set('action', v)), ACTION_TIPS[c.action]);
         if (c.action != 'storage') {
             settingRow('Worth 0', choice([true, false], { true: 'Storage', false: 'Anyway' }, c.zero, v => set('zero', v)),
                 c.zero ? 'An animal the game says is worth 0 goes to Animal Storage instead.'
                     : `An animal worth 0 is ${c.action == 'trade' ? 'traded' : 'released'} anyway.`);
+            const sDo = c.action == 'trade' ? 'sold' : 'released';
+            settingRow('Keep good genes', onOff(c.genes, v => set('genes', v)),
+                `On: an animal whose genes reach every limit below goes to Animal Storage for breeding; the others are ${sDo}.`);
+            if (c.genes) {
+                for (const g of GENES) {
+                    const n = c.min[g];
+                    const setMin = v => {
+                        c.min[g] = Math.max(0, Math.min(100, v));
+                        saveKindCfg();
+                    };
+                    settingRow(`${GENE_LABELS[g]} at least`, stepper(n ? `${n}%` : 'any', () => setMin(n - GENE_STEP), () => setMin(n + GENE_STEP),
+                        n <= 0, n >= 100));
+                }
+                const always = c.action == 'trade' ? 'Always sell' : 'Always release';
+                settingRow('Males', choice(['genes', 'always'], { genes: 'Check genes', always }, c.male, v => set('male', v)),
+                    `"${always}": every male that has to leave is ${sDo}, whatever its genes.`);
+                settingRow('Females', choice(['genes', 'always'], { genes: 'Check genes', always }, c.female, v => set('female', v)),
+                    `"${always}": every female that has to leave is ${sDo}, whatever its genes.`);
+            }
+        }
+        if (tab != 'habitat') {
+            // 1 .. MAX_SHOALS, then "No limit" (0) at the top
+            const n = c.shoals;
+            const up = n == 0 ? 0 : (n >= MAX_SHOALS ? 0 : n + 1);
+            const down = n == 0 ? MAX_SHOALS : Math.max(1, n - 1);
+            settingRow('Shoals per species', stepper(n ? String(n) : 'No limit', () => set('shoals', down), () => set('shoals', up),
+                n == 1, n == 0),
+                n ? `Each ${tab == 'exhibit' ? 'vivarium' : 'aquarium'} keeps up to ${n} shoal${n > 1 ? 's' : ''} of one species (the youngest); older ones of that species leave. Other species don't count.`
+                    : 'Shoals are never moved, however many of one species live together.');
         }
         settingRow('Brother + sister', onOff(c.siblings, v => set('siblings', v)),
             'On: an adult brother and sister living together both leave. Same-sex siblings stay.');
@@ -804,7 +869,7 @@ function renderSettings() {
         const others = KINDS.filter(k => k != tab).map(k => KIND_LABELS[k].toLowerCase()).join(' + ');
         settingRow('', [button(isArmed('copy') ? 'Click again to confirm' : `Copy to ${others}`, () => confirmClick('copy', () => {
             // each kind keeps its own on / off
-            for (const k of KINDS) if (k != tab) kindCfg[k] = Object.assign({}, c, { on: kindCfg[k].on });
+            for (const k of KINDS) if (k != tab) kindCfg[k] = Object.assign({}, c, { on: kindCfg[k].on, min: Object.assign({}, c.min) });
             saveKindCfg();
         }), isArmed('copy') ? 'armed small' : 'small')]);
     }
@@ -1080,6 +1145,7 @@ engine.on('PZ2AutoHub_Hello', (version, park, storeText, storeStatus) => {
     earned = readEarned();
     // the animals AutoHub put on contraception in this park, before any tick
     send('PZ2AutoHub_SetContraKeys', readSetting(CONTRA_KEYS_PREFIX + parkKey, ''));
+    send('PZ2AutoHub_SetYoungKeys', readSetting(YOUNG_PREFIX + parkKey, ''));
     sendKindCfg();
     send('PZ2AutoHub_SetInterval', interval);
     addLog(`connected to mod Lua v${version}; settings: ${storeState}`);
@@ -1116,7 +1182,9 @@ engine.on('PZ2AutoHub_Result', (sent, failed, notes) => {
         if (count('sold')) parts.push(`${count('sold')} sold (Quick Trade)`);
         if (count('released')) parts.push(`${count('released')} released (Quick Release)`);
         text = sent ? `Moved ${sent} animal${sent == 1 ? '' : 's'} out: ${parts.join(', ')}.` : '';
-        const nFallback = lines.filter(l => l.includes('sent to Animal Storage instead')).length;
+        const nKept = lines.filter(l => l.includes('kept for breeding')).length;
+        const nFallback = lines.filter(l => l.includes('sent to Animal Storage instead') && !l.includes('kept for breeding')).length;
+        if (nKept) text += ` ${nKept} kept in Animal Storage for breeding (good genes).`;
         if (nFallback) text += ` ${nFallback} could not be traded / released and went to Animal Storage (see log).`;
         if (lines.some(l => l.includes('values still loading'))) text += ' Some are waiting until the game knows what they are worth: check again in a few seconds.';
         if (failed) {
@@ -1140,7 +1208,8 @@ engine.on('PZ2AutoHub_AutoSent', (name, why, done, note, value) => {
     sentLines.unshift(`${clock()}  ${sName}: ${sDone} (${sWhy})`);
     while (sentLines.length > SENT_LINES) sentLines.pop();
     if (note) {
-        toast(`${sName}: ${plainName(note)}. Sent to Animal Storage instead.`);
+        const sNote = plainName(note);
+        toast(sNote.includes('kept for breeding') ? `${sName}: ${sNote} (Animal Storage)` : `${sName}: ${sNote}. Sent to Animal Storage instead.`);
         addLog(`auto: ${sName} ${sDone} (${sWhy}); ${plainName(note)}`);
     }
     else {
@@ -1187,6 +1256,11 @@ engine.on('PZ2AutoHub_ContraStatus', (animals, nOn, nOff) => {
     render();
 });
 
+// Lua's list of animals seen growing up where they live (saved per park)
+engine.on('PZ2AutoHub_YoungKeys', list => {
+    if (parkKey) saveSetting(YOUNG_PREFIX + parkKey, String(list || '') || null);
+});
+
 // Lua's list of animals it put on contraception (saved per park)
 engine.on('PZ2AutoHub_ContraKeys', list => {
     if (parkKey) saveSetting(CONTRA_KEYS_PREFIX + parkKey, String(list || '') || null);
@@ -1205,7 +1279,7 @@ engine.on('PZ2AutoHub_AutoStatus', (habitats, animals, sent, vivariums, aquarium
 });
 
 function tickRunning() {
-    return connected && (anyAuto() || anyContra());
+    return connected && (anyAuto() || anyContra() || anyGrown());
 }
 
 // called by every driver; sends when a tick is due

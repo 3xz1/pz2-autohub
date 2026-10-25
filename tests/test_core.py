@@ -215,11 +215,11 @@ view = open_hud(lua)
 check(view.sLoaded == AUTOHUB_PAGE, f"takes over the game's HUD, got {view.sLoaded}")
 hello = events(lua, "PZ2AutoHub_Hello")
 check(len(hello) == 1, "one hello")
-check(hello and hello[0][1][:2] == ["1.4.2", "Lions"], f"hello: version and park name, got {hello}")
+check(hello and hello[0][1][:2] == ["1.7.0", "Lions"], f"hello: version and park name, got {hello}")
 check(hello and hello[0][1][2:] == ["", "ok"], f"hello: nothing kept yet, got {hello and hello[0][1][2:]}")
 want_args = {
     "PZ2AutoHub_SetAuto": 1, "PZ2AutoHub_SetSiblings": 1, "PZ2AutoHub_SetKinds": 1, "PZ2AutoHub_SetKindCfg": 1, "PZ2AutoHub_SetInterval": 1,
-    "PZ2AutoHub_SetContra": 1, "PZ2AutoHub_SetContraKeys": 1, "PZ2AutoHub_Tick": 1, "PZ2AutoHub_SendFromHabitat": 2,
+    "PZ2AutoHub_SetContra": 1, "PZ2AutoHub_SetContraKeys": 1, "PZ2AutoHub_SetYoungKeys": 1, "PZ2AutoHub_Tick": 1, "PZ2AutoHub_SendFromHabitat": 2,
     "PZ2AutoHub_CheckAll": 1, "PZ2AutoHub_Diagnose": 2, "PZ2AutoHub_StoreSave": 1,
 }
 got_args = {k: v.n for k, v in view.tListeners.items()}

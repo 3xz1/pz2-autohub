@@ -1,4 +1,4 @@
-# AutoHub for Planet Zoo 2 (version 1.4.2)
+# AutoHub for Planet Zoo 2 (version 1.7.0)
 
 Finds related animals living together and moves them out (to Animal
 Storage, by Quick Trade or by Quick Release), or puts the young ones on
@@ -64,11 +64,22 @@ habitat or vivarium:
   rule can be switched off.
 
 Same-sex siblings stay together. Juveniles (not grown up yet) and
-elderly animals are never sent. Cousins don't count, as in the game.
+elderly animals never leave. Cousins don't count, as in the game.
 
-Fish shoals (aquariums and vivarium tanks): with 2 or more shoals of the
-same species in one tank (a shoal that split in two), all but the
-YOUNGEST shoal leave.
+**Who leaves: Grown up here** (per kind): only animals AutoHub saw as
+juveniles in that habitat, aquarium or vivarium leave once they are
+adults. Adults you place there yourself stay, also next to their
+brothers, sisters or parents, and they get no contraception, so they can
+breed. Their young that grow up there leave as usual. AutoHub remembers
+who grew up where, per park; an animal moved to another habitat as an
+adult counts as placed there. Adults living there when you switch it on
+count as placed. "All related" (default) is the old rule: every related
+adult leaves.
+
+Fish shoals (aquariums and vivarium tanks): with more shoals of one
+species in one tank than "Shoals per species" allows (default 1, for
+example a shoal that split in two), the OLDEST ones leave and the
+youngest stay. Other species don't count.
 
 ## Where they go (the action)
 
@@ -83,6 +94,15 @@ YOUNGEST shoal leave.
 The game doesn't allow Quick Trade or Quick Release for every animal
 (the same animals whose buttons are greyed out in the game). Those go to
 Animal Storage instead, and the log and a notice say why.
+
+**Keep good genes** (per kind, with Quick Trade / Quick Release): set a
+minimum for each of the game's gene values (Vitality, Longevity,
+Fertility, Immunity; 0 = any). An animal that has to leave and reaches
+every minimum goes to Animal Storage for your next breeding round; the
+others are traded / released. Per sex you can say "Always sell" (or
+"Always release"): then that sex is never checked, e.g. sell every male
+and keep only the best females. Fish shoals are never checked. If the
+game gives no gene values for an animal, it is kept.
 
 Animals the game says are worth 0: by default they go to Animal Storage
 instead of being traded or released for nothing. "Worth 0: Anyway"
@@ -133,9 +153,14 @@ The panel has three pages: Overview, Settings and Log.
 | Setting | What it does |
 |---|---|
 | Look after | Whether AutoHub looks after this kind at all (on). |
-| Auto | Off (default): only the Check buttons move animals. New adults: acts when an animal grows up. Always: checks at every check, whenever the animals grew up or moved in (also catches a shoal split). |
+| Who leaves | All related (default), or Grown up here: only animals that grew up in that habitat leave; adults you placed stay. |
+| Auto | Off (default): only the Check buttons move animals. New adults: acts on animals that grew up in their habitat, at every check until they are gone, and checks everyone once when a park opens. Always: checks at every check, whenever the animals grew up or moved in (also catches a shoal split). |
 | Action | Storage (default), Quick Trade or Quick Release. See "Where they go". |
 | Worth 0 | Only with Quick Trade / Release: an animal the game says is worth 0 goes to Storage (default), or is traded / released Anyway. |
+| Keep good genes | Only with Quick Trade / Release (off): animals reaching every gene minimum go to Storage for breeding. |
+| Vitality / Longevity / Fertility / Immunity at least | The minimums, in steps of 5 % (any = no minimum). |
+| Males / Females | Check genes (default), or Always sell / release that sex. |
+| Shoals per species | Aquariums and Vivariums only: how many shoals of one species a tank may keep, 1-10 or No limit (default 1). |
 | Brother + sister | The sibling rule (on). |
 | Contraception | On / off (off). See "Auto contraception" above. |
 | Copy to ... | Copies Auto, action, Brother + sister and contraception to the other two kinds; their on / off stays. Click twice to confirm. |
@@ -163,6 +188,42 @@ is still loading"; check again a few seconds later.
 - The panel follows the game's UI scale and screen size.
 
 ## Changes
+
+### 1.7.0
+- New "Shoals per species" (Aquariums and Vivariums, 1 to 10 or No
+  limit, default 1): how many shoals of one species a tank may keep.
+  The youngest stay, older ones of that species leave; other species
+  never count. Set it higher (or No limit) to keep shoals you bought.
+  The log names the species ("older Clownfish shoal").
+- Fixed: "New adults" sometimes missed animals that grew up, so they
+  stayed with their parents or siblings. It only looked once, at the
+  moment an animal grew up, and forgot it after a park reload or after
+  5 minutes of failed tries (for example storage full). Now every check
+  looks at all adults that grew up in their habitat, until they are gone.
+- "New adults" checks everyone once when a park opens (also when you
+  switch to another zoo), so adults that grew up earlier are caught too.
+  "Who leaves: Grown up here" still applies.
+- Faster: each check asks the game about 8 times less (sex and parents
+  are remembered for a few minutes, and each animal is read once per
+  check). Diagnose shows "game calls last check". Parents are remembered
+  as long as the animal is in the park.
+
+### 1.6.0
+- New "Who leaves: Grown up here" (per kind): only animals that grew up
+  in the habitat, aquarium or vivarium leave. Adults you place there
+  stay, also next to their brothers and sisters, and get no
+  contraception, so they can breed.
+
+### 1.5.1
+- Gene minimums now go in steps of 5 % instead of 10 %.
+
+### 1.5.0
+- New "Keep good genes" (per kind, with Quick Trade / Quick Release):
+  animals that have to leave and reach your minimum Vitality,
+  Longevity, Fertility and Immunity go to Animal Storage for breeding;
+  the others are traded / released. Per sex: check genes, or always
+  sell / release.
+- Diagnose shows every animal's genes.
 
 ### 1.4.2
 - New setting "Worth 0" (per kind, with Quick Trade / Quick Release):
