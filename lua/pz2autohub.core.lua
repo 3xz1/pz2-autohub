@@ -33,7 +33,7 @@ local math      = global.math
 
 local Core = module(...)
 
-Core.sVersion = "1.7.0"
+Core.sVersion = "1.7.1"
 Core.bBooted = false
 
 Core.sOverlayName = "PZ2AutoHubUI"
@@ -45,6 +45,8 @@ Core.sModHUD = "coui://UIGameface/PZ2AutoHubHUD.html"
 Core.tReplaceableHUDs = {
 	["coui://UIGameface/HUD.html"] = true,
 	["coui://UIGameface/PZ2QoLHUD.html"] = true,
+	-- More Path Stamp Sizes: swaps exactly HUD.html in Init, like the Toolbox
+	["coui://UIGameface/MorePathStampSizesHUD.html"] = true,
 	["coui://UIGameface/PZ2GuardianHUD.html"] = true,
 	["coui://UIGameface/PZ2StudbookHUD.html"] = true,
 	["coui://UIGameface/PZ2TimeWarpHUD.html"] = true,
@@ -342,8 +344,79 @@ Core._PatchHUDUI = function(self, HUDUI)
 	end
 end
 
+-----------------------------------------------------------------------
+-- the shared HUD registry of PZ2Essentials and other mods built from its
+-- template (raw global PZ2HUDMods, version 2). Those mods swap the HUD page
+-- in Init; their page's loader asks Lua for every registered mod's scripts
+-- and imports them, and their ready hook calls each mod's OnReady. On such
+-- a page we join instead of taking it over (taking it would drop their UI;
+-- leaving it without joining dropped ours).
+-----------------------------------------------------------------------
+Core.tSharedScripts = { HUD = { "/js/mods/pz2autohub/main.js" } }
+Core.tSharedUIs = global.setmetatable({}, { __mode = "k" }) -- view wrappers we joined
+
+Core._SharedRegistry = function(self)
+	local R = global.rawget(global, "PZ2HUDMods")
+	if type(R) ~= "table" or R.nVersion ~= 2 then
+		R = {
+			nVersion = 2,
+			tMods = {},
+			tPages = {},
+			tWrapped = global.setmetatable({}, { __mode = "k" }),
+			tUIs = {},
+		}
+		global.rawset(global, "PZ2HUDMods", R)
+	end
+	return R
+end
+
+-- (Re)adds us to the registry; idempotent.
+Core._JoinShared = function(self)
+	local R = self:_SharedRegistry()
+	if self.tSharedEntry == nil then
+		self.tSharedEntry = {
+			tScripts = self.tSharedScripts,
+			IsReady = function()
+				return self.sOverlayState == "mapped" and self.bProbeOk
+			end,
+			OnReady = function(sView, oUI)
+				if sView ~= "HUD" or not self.tSharedUIs[oUI] then
+					return
+				end
+				local bOk, sErr = pcall(self._OnHUDReady, self, oUI)
+				if not bOk then
+					trace("HUD ready failed: " .. tostring(sErr))
+				end
+			end,
+		}
+	end
+	R.tMods["PZ2AutoHub"] = self.tSharedEntry
+	return R
+end
+
+-- True when the view shows a shared-registry page whose ready hook is set.
+Core._JoinSharedPage = function(self, oUI, sAddress)
+	local R = self:_JoinShared()
+	if R.tPages[sAddress] ~= "HUD" or not R.tWrapped[oUI] then
+		return false
+	end
+	self:_TryMap()
+	if self.sOverlayState ~= "mapped" or not self.bProbeOk then
+		self.sHUDState = "left " .. tostring(sAddress) .. " (overlay " .. self.sOverlayState .. ", probe " .. tostring(self.bProbeOk) .. ")"
+		return true
+	end
+	self.tSharedUIs[oUI] = true
+	self.oHUDUI = oUI
+	self.bHUDIsModded = true
+	self.sHUDState = "joined " .. sAddress .. " (shared page)"
+	return true
+end
+
 Core._TakeOver = function(self, oUI)
 	local sAddress = type(oUI) == "table" and oUI.sViewAddress or nil
+	if self:_JoinSharedPage(oUI, sAddress) then
+		return
+	end
 	if not self.tReplaceableHUDs[sAddress] then
 		return
 	end
@@ -457,8 +530,17 @@ Core._OnHUDReady = function(self, oUI)
 	if Logic and Logic.StartPark then
 		pcall(Logic.StartPark, Logic)
 	end
-	-- the saved settings go with the hello, so the page has them before it
-	-- hands its settings to Lua
+	-- a page that loads our script after the view was ready (a shared page's
+	-- loader imports it late) missed the hello and asks for it again
+	pcall(listen, oUI, "PZ2AutoHub_HelloAgain", 1, function()
+		self:_SendHello()
+	end)
+	self:_SendHello()
+end
+
+-- the saved settings go with the hello, so the page has them before it
+-- hands its settings to Lua
+Core._SendHello = function(self)
 	local bRead, sText, sStatus = pcall(self.StoreRead, self)
 	if not bRead then
 		sText, sStatus = "", "error: " .. tostring(sText)
@@ -606,6 +688,7 @@ Core.Boot = function(self)
 	if not bOk then
 		trace("logic failed to init: " .. tostring(sErr))
 	end
+	pcall(self._JoinShared, self)
 	self:AddModulePatch("UI.Controllers.HUDUI", function(t) self:_PatchHUDUI(t) end)
 	self:AddModulePatch("Game.GameScript", function(t) self:_PatchGameScript(t) end)
 	self:AddModulePatch("Worlds.DarwinWorld", function(t) self:_PatchDarwinWorld(t) end)

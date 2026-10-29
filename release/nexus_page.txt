@@ -15,11 +15,19 @@ AutoHub uses the game's own rule for related animals: a parent and its child, or
 [list]
 [*]An [b]adult living with its mother or father[/b] leaves.
 [*]An [b]adult brother and sister[/b] (half-siblings too) both leave. This rule can be switched off.
-[*][b]Fish shoals[/b]: with 2 or more shoals of one species in a tank (a shoal that split), all but the youngest leave.
+[*][b]Fish shoals[/b]: when a tank has more shoals of one species than you allow ([b]Shoals per species[/b], 1 to 10 or No limit, default 1), the oldest ones leave and the youngest stay. This catches a shoal that split in two. Other species never count, so a tank with Clownfish and Tangs is fine. Set it higher, or to No limit, to keep extra shoals you bought.
 [/list]
 Same-sex siblings stay together. Juveniles and elderly animals never leave. Cousins don't count, as in the game.
 
 [b]Who leaves: Grown up here[/b] (per kind): only animals AutoHub saw growing up in that habitat leave once they are adults. Adults you place there yourself stay, even next to their brothers, sisters or parents, and get no contraception, so they can breed. Their young that grow up there leave as usual.
+
+[size=4][b]When it checks[/b][/size]
+[list]
+[*][b]Off[/b] (default): only when you press [b]Check all[/b] or [b]Check the open habitat[/b].
+[*][b]New adults[/b]: animals that grew up in their habitat leave once they are adults. AutoHub keeps checking them until they are gone, so a full storage or a park reload doesn't make it forget them. When a park opens (or you switch to another zoo), it checks everyone once.
+[*][b]Always[/b]: every animal at every check, however long it has lived there.
+[/list]
+Auto checks every 5 seconds of real time by default (1 s to 5 min), whatever the game speed.
 
 [size=4][b]Where they go[/b][/size]
 You choose, separately for habitats, aquariums and vivariums:
@@ -45,7 +53,7 @@ Newborns living with their mother or father of the other sex (or a brother or si
 [size=4][b]The panel[/b][/size]
 [list]
 [*][b]Overview[/b]: what each kind is set to, when the last check ran, [b]Check all[/b] and [b]Check the open habitat[/b] (two clicks, so nothing moves by accident), the earnings and the last animals moved out.
-[*][b]Settings[/b]: per kind (habitats, aquariums, vivariums): on/off, Auto (Off / New adults / Always), who leaves (all related / grown up here), action, Worth 0, keep good genes (with gene minimums and per-sex rules), brother + sister, contraception; one click copies them to the other two. General: how often Auto checks (1 s to 5 min, default 5 s), size, screen button, and short help texts if you want them.
+[*][b]Settings[/b]: per kind (habitats, aquariums, vivariums): on/off, Auto (Off / New adults / Always), who leaves (all related / grown up here), action, Worth 0, keep good genes (with gene minimums and per-sex rules), shoals per species (aquariums and vivariums), brother + sister, contraception; one click copies them to the other two. General: how often Auto checks (1 s to 5 min, default 5 s), size, screen button, and short help texts if you want them.
 [*][b]Log[/b]: everything AutoHub did, contraception changes, and [b]Diagnose[/b] for bug reports.
 [/list]
 
@@ -56,6 +64,7 @@ Newborns living with their mother or father of the other sex (or a brother or si
 [*]Settings are saved in your player profile, for all parks; the earnings are saved per park.
 [*]Quick Trade / Release values: if the game hasn't loaded an animal's value yet, AutoHub waits up to 15 seconds for it.
 [*]Vivariums: the game loads family data in the background. The first check after loading a park may say "family data is still loading"; check again a few seconds later.
+[*]Light on performance: each animal is read once per check, and its sex and parents are remembered while it is in the park. Diagnose shows how many game calls the last check made.
 [*]Franchise: Quick Trade and Quick Release are not tested there yet. If the game refuses them, the animals go to Animal Storage instead.
 [/list]
 
@@ -70,21 +79,15 @@ Newborns living with their mother or father of the other sex (or a brother or si
 [b]Uninstall:[/b] delete [i]Planet Zoo 2\Win64\ovldata\PZ2AutoHub[/i].
 
 [size=4][b]Compatibility[/b][/size]
-Works alongside [b]Guardian[/b] (they share the in-park screen and the "Mods" box in the Esc menu) and [b]Mike's QoL Toolbox[/b] (any install order). No game files are changed. The only thing written is AutoHub's own small entry in your player profile; nothing goes into park saves or online saves.
+Works alongside [b]Guardian[/b] (they share the in-park screen and the "Mods" box in the Esc menu) [b]Mike's QoL Toolbox[/b], [b]PZ2 Essentials[/b] and [b]More Path Stamp Sizes[/b] (any install order). No game files are changed. The only thing written is AutoHub's own small entry in your player profile; nothing goes into park saves or online saves.
 
-[size=4][b]New in 1.7.0[/b] (since 1.2.0)[/size]
+[size=4][b]New in 1.7.0[/b][/size]
 [list]
-[*]"Who leaves: Grown up here": animals you place stay, only those that grow up there leave.
-[*]"Keep good genes": animals with the genes you want go to Animal Storage for breeding, the rest are sold or released.
-[*]Quick Trade and Quick Release, with the amount logged and an earnings table.
-[*]Separate settings for habitats, aquariums and vivariums.
-[*]"Worth 0": animals worth nothing go to Animal Storage (or anyway, your choice).
-[*]A tidier panel with three pages: Overview, Settings, Log.
-[*]Fixed: Auto could stop a few minutes after loading a park.
-[*]"Shoals per species": keep up to 10 shoals of one species per tank (or no limit).
-[*]Fixed: "New adults" could miss animals that grew up. It now also checks everyone once when a park opens.
+[*]"Shoals per species": keep up to 10 shoals of one species per tank, or no limit. Bought shoals no longer have to go.
+[*]Fixed: "New adults" could miss animals that grew up, so they stayed with their family. It now keeps checking them, and checks everyone once when a park opens.
 [*]Faster: each check asks the game about 8 times less.
 [/list]
+[b]Since 1.2.0[/b] also: "Who leaves: Grown up here", "Keep good genes", Quick Trade and Quick Release with an earnings table, separate settings for habitats, aquariums and vivariums, "Worth 0", and a three-page panel.
 Full list in the Changelogs tab.
 
 [size=4][b]Bug reports[/b][/size]
@@ -93,12 +96,16 @@ Please open the panel, open the habitat in question, click [b]Diagnose[/b] (Log 
 [i]Unofficial fan mod, not affiliated with Frontier Developments.[/i]
 
 === CHANGELOG (Nexus "Changelogs" tab, one entry per version) ===
+[b]1.7.1[/b]
+[list]
+[*]Fixed: with PZ2 Essentials or More Path Stamp Sizes installed, AutoHub's screen button and the "Mods" box in the Esc menu were missing and AutoHub did nothing. AutoHub now shares the in-park screen with them, so both work, in any install order.
+[/list]
 [b]1.7.0[/b]
 [list]
 [*]New "Shoals per species" (Aquariums and Vivariums, 1 to 10 or No limit, default 1): how many shoals of one species a tank may keep. The youngest stay, older ones of that species leave; other species never count. Set it higher (or No limit) to keep shoals you bought. The log names the species ("older Clownfish shoal").
 [*]Fixed: "New adults" sometimes missed animals that grew up, so they stayed with their parents or siblings. It only looked once, at the moment an animal grew up, and forgot it after a park reload or after 5 minutes of failed tries (for example storage full). Now every check looks at all adults that grew up in their habitat, until they are gone.
 [*]"New adults" checks everyone once when a park opens (also when you switch to another zoo), so adults that grew up earlier are caught too. "Who leaves: Grown up here" still applies.
-[*]Faster: each check asks the game about 8 times less (sex and parents are remembered for a few minutes, each animal is read once per check). Diagnose shows "game calls last check". Parents are remembered as long as the animal is in the park.
+[*]Faster: each check asks the game about 8 times less (each animal is read once per check; its sex and parents are remembered while it is in the park). Diagnose shows "game calls last check".
 [/list]
 
 [b]1.6.0[/b]

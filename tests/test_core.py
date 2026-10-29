@@ -148,6 +148,93 @@ require = function(name, ...)
 end
 """
 
+# PZ2Essentials 1.0.1 (PZ2Essentials.UI, from its Tools/PZ2Shared template):
+# shared registry PZ2HUDMods v2; HUDUI.Init swaps exactly HUD.html to its
+# page and hooks the ready callback, which calls every ready mod's OnReady
+# and then answers PZ2HUD_GetScripts with every ready mod's scripts.
+FAKE_ESS = r"""
+local function registry()
+  local R = rawget(_G, "PZ2HUDMods")
+  if type(R) ~= "table" or R.nVersion ~= 2 then
+    R = { nVersion = 2, tMods = {}, tPages = {}, tWrapped = setmetatable({}, { __mode = "k" }), tUIs = {} }
+    rawset(_G, "PZ2HUDMods", R)
+  end
+  return R
+end
+Ess = { sPage = "coui://UIGameface/PZ2EssentialsHUD.html", nReady = 0 }
+Ess.tEntry = {
+  tScripts = { HUD = { "/js/mods/pz2essentials/autosave/main.js" } },
+  IsReady = function() return true end,
+  OnReady = function(sView, oUI) Ess.nReady = Ess.nReady + 1 end,
+}
+local function scripts(R)
+  local tNames, tOut = {}, {}
+  for sName, tMod in pairs(R.tMods) do if tMod.IsReady() then tNames[#tNames + 1] = sName end end
+  table.sort(tNames)
+  for _, sName in ipairs(tNames) do
+    for _, s in ipairs(R.tMods[sName].tScripts.HUD or {}) do tOut[#tOut + 1] = s end
+  end
+  return table.concat(tOut, ",")
+end
+local fnRequire = require
+require = function(name, ...)
+  local t = fnRequire(name, ...)
+  if string.lower(name) == "ui.controllers.hudui" and not Ess.bPatched then
+    Ess.bPatched = true
+    local fnInit = t.Init or ViewWrapper.Init
+    t.Init = function(oUI, tInitSettings)
+      local R = registry()
+      R.tPages[Ess.sPage] = "HUD"
+      R.tMods.PZ2Essentials = Ess.tEntry
+      if tInitSettings.sViewAddress == "coui://UIGameface/HUD.html" then
+        tInitSettings.sViewAddress = Ess.sPage
+      end
+      if R.tPages[tInitSettings.sViewAddress] == "HUD" and not R.tWrapped[oUI] then
+        R.tWrapped[oUI] = true
+        R.tUIs.HUD = oUI
+        local fnReady = tInitSettings.fnOnReadyCallback
+        tInitSettings.fnOnReadyCallback = function(...)
+          local R2 = registry()
+          for _, tMod in pairs(R2.tMods) do if tMod.IsReady() then tMod.OnReady("HUD", oUI) end end
+          oUI:TriggerEventAtNextAdvance("PZ2HUD_Scripts", scripts(R2))
+          if fnReady then return fnReady(...) end
+        end
+      end
+      return fnInit(oUI, tInitSettings)
+    end
+  end
+  return t
+end
+"""
+
+# More Path Stamp Sizes (Pure Winter, Nexus planetzoo2 mod 64, version 4):
+# MorePathStampSizes.Core.PatchHUD wraps HUDUI.Init, swaps exactly HUD.html
+# and wraps fnOnReadyCallback (its listeners; its JS sends the hello).
+FAKE_MPSS = r"""
+Mpss = { nReady = 0 }
+local fnRequire = require
+require = function(name, ...)
+  local t = fnRequire(name, ...)
+  if string.lower(name) == "ui.controllers.hudui" and not Mpss.bPatched then
+    Mpss.bPatched = true
+    local oldInit = t.Init or ViewWrapper.Init
+    t.Init = function(view, settings, ...)
+      if type(settings) == "table" and settings.sViewAddress == "coui://UIGameface/HUD.html" then
+        settings.sViewAddress = "coui://UIGameface/MorePathStampSizesHUD.html"
+        local ready = settings.fnOnReadyCallback
+        settings.fnOnReadyCallback = function(...)
+          Mpss.nReady = Mpss.nReady + 1
+          view:AddEventListener("MorePathStampSizes_Hello", 0, function() end, Mpss)
+          if ready then return ready(...) end
+        end
+      end
+      return oldInit(view, settings, ...)
+    end
+  end
+  return t
+end
+"""
+
 FAILS = 0
 OKS = 0
 
@@ -178,6 +265,10 @@ def boot(order):
     for name in order:
         if name == "QoL":
             lua.execute(FAKE_QOL)
+        elif name == "Ess":
+            lua.execute(FAKE_ESS)
+        elif name == "Mpss":
+            lua.execute(FAKE_MPSS)
         else:
             lua.execute(f'require("Database.PZ2{name}LuaDatabase")')
             lua.execute(f'package.loaded["pz2{name.lower()}.core"].bProbeOk = true')
@@ -215,12 +306,12 @@ view = open_hud(lua)
 check(view.sLoaded == AUTOHUB_PAGE, f"takes over the game's HUD, got {view.sLoaded}")
 hello = events(lua, "PZ2AutoHub_Hello")
 check(len(hello) == 1, "one hello")
-check(hello and hello[0][1][:2] == ["1.7.0", "Lions"], f"hello: version and park name, got {hello}")
+check(hello and hello[0][1][:2] == ["1.7.1", "Lions"], f"hello: version and park name, got {hello}")
 check(hello and hello[0][1][2:] == ["", "ok"], f"hello: nothing kept yet, got {hello and hello[0][1][2:]}")
 want_args = {
     "PZ2AutoHub_SetAuto": 1, "PZ2AutoHub_SetSiblings": 1, "PZ2AutoHub_SetKinds": 1, "PZ2AutoHub_SetKindCfg": 1, "PZ2AutoHub_SetInterval": 1,
     "PZ2AutoHub_SetContra": 1, "PZ2AutoHub_SetContraKeys": 1, "PZ2AutoHub_SetYoungKeys": 1, "PZ2AutoHub_Tick": 1, "PZ2AutoHub_SendFromHabitat": 2,
-    "PZ2AutoHub_CheckAll": 1, "PZ2AutoHub_Diagnose": 2, "PZ2AutoHub_StoreSave": 1,
+    "PZ2AutoHub_CheckAll": 1, "PZ2AutoHub_Diagnose": 2, "PZ2AutoHub_StoreSave": 1, "PZ2AutoHub_HelloAgain": 1,
 }
 got_args = {k: v.n for k, v in view.tListeners.items()}
 check(got_args == want_args, f"listeners and argument counts (main.js), got {got_args}")
@@ -322,6 +413,53 @@ lua.execute("sent = {}")
 view2.Fire(view2, "PZ2AutoHub_Diagnose", "", "")
 logs = [a[0] for _, a in events(lua, "PZ2AutoHub_Log")]
 check(any("settings store:" in s and "HUD: took over" in s for s in logs), f"Diagnose shows the HUD and store state, got {logs[:2]}")
+
+# --- More Path Stamp Sizes (Init swap of exactly HUD.html), every order ------
+mods = ["AutoHub", "Mpss"] + (["Guardian"] if os.path.isdir(GUARDIAN_LUA) else [])
+for order in itertools.permutations(mods):
+    order = list(order)
+    lua = boot(order)
+    view = open_hud(lua)
+    n = names(lua)
+    tag = "+".join(order)
+    check(view.sLoaded in (AUTOHUB_PAGE, GUARDIAN_PAGE), f"{tag}: our page (it loads the path mod's script), got {view.sLoaded}")
+    check(lua.eval("Mpss.nReady") == 1, f"{tag}: the path mod's ready callback ran")
+    check("MorePathStampSizes_Hello" in view.tListeners, f"{tag}: the path mod listens on the view")
+    for hello in ["PZ2AutoHub_Hello"] + (["PZ2Guardian_Hello"] if "Guardian" in order else []):
+        check(n.count(hello) == 1, f"{tag}: {hello} once, got {n.count(hello)}")
+
+# --- PZ2Essentials (shared registry page) ---------------------------------
+ESS_PAGE = "coui://UIGameface/PZ2EssentialsHUD.html"
+for order in (["Ess", "AutoHub"], ["AutoHub", "Ess"], ["Ess", "AutoHub", "Guardian"], ["Guardian", "AutoHub", "Ess"]):
+    if "Guardian" in order and not os.path.isdir(GUARDIAN_LUA):
+        continue
+    lua = boot(order)
+    view = open_hud(lua)
+    tag = "+".join(order)
+    check(view.sLoaded == ESS_PAGE, f"{tag}: Essentials keeps its page, got {view.sLoaded}")
+    check(lua.eval("Ess.nReady") == 1, f"{tag}: Essentials' own ready hook ran")
+    scripts = [a[0] for _, a in events(lua, "PZ2HUD_Scripts")]
+    check(scripts and "/js/mods/pz2autohub/main.js" in scripts[0].split(","), f"{tag}: the shared loader gets AutoHub's script, got {scripts}")
+    if "Guardian" in order:
+        check(scripts and "/js/mods/pz2guardian/main.js" in scripts[0].split(","), f"{tag}: and Guardian's, got {scripts}")
+        check(len(events(lua, "PZ2Guardian_Hello")) == 1, f"{tag}: Guardian says hello once")
+    check(len(events(lua, "PZ2AutoHub_Hello")) == 1, f"{tag}: AutoHub's ready ran once (one hello)")
+    check("PZ2AutoHub_Tick" in view.tListeners, f"{tag}: AutoHub listens on the shared page")
+    core = lua.eval('package.loaded["pz2autohub.core"]')
+    check(str(core.sHUDState).startswith("joined " + ESS_PAGE), f"{tag}: HUD state says joined, got {core.sHUDState}")
+    # the page imports our script late and asks for the hello again
+    lua.execute("sent = {}")
+    view.Fire(view, "PZ2AutoHub_HelloAgain", 1)
+    hello = events(lua, "PZ2AutoHub_Hello")
+    check(len(hello) == 1 and hello[0][1][:2] == ["1.7.1", "Lions"], f"{tag}: HelloAgain answers with a hello, got {hello}")
+
+# overlay not ready: Essentials keeps its page, AutoHub stays out of it
+lua = boot(["Ess", "AutoHub"])
+lua.execute('package.loaded["pz2autohub.core"].bProbeOk = false')
+view = open_hud(lua)
+scripts = [a[0] for _, a in events(lua, "PZ2HUD_Scripts")]
+check(view.sLoaded == ESS_PAGE and scripts and "pz2autohub" not in scripts[0], f"no probe: not registered as ready, got {scripts}")
+check(not events(lua, "PZ2AutoHub_Hello"), "no probe: no hello")
 
 print(f"{OKS} ok, {FAILS} failed")
 sys.exit(1 if FAILS else 0)

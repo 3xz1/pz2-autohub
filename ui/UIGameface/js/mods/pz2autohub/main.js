@@ -27,7 +27,7 @@ import { DataStoreCollection } from '/js/common/data/DataStoreCollection.js';
 import { loadCSS } from '/js/common/util/CSSUtil.js';
 import { addPauseMenuEntry, refreshPauseMenu } from './pausemenu.js';
 
-const VERSION = '1.7.0';
+const VERSION = '1.7.1';
 const MODE_KEY = 'PZ2AutoHub.mode';
 const OLD_AUTO_KEY = 'PZ2AutoHub.auto';
 const SIBLINGS_KEY = 'PZ2AutoHub.siblings';
@@ -1150,6 +1150,19 @@ engine.on('PZ2AutoHub_Hello', (version, park, storeText, storeStatus) => {
     send('PZ2AutoHub_SetInterval', interval);
     addLog(`connected to mod Lua v${version}; settings: ${storeState}`);
 });
+
+// On a shared page (PZ2Essentials' loader) this script is imported after
+// the view was ready, so Lua's hello went out before we listened: ask again.
+let helloAsks = 0;
+const helloTimer = setInterval(() => {
+    if (connected || ++helloAsks > 60) return clearInterval(helloTimer);
+    try {
+        engine.trigger('PZ2AutoHub_HelloAgain', 1);
+    }
+    catch (e) {
+        // the engine is not ready yet; ask again next time
+    }
+}, 2000);
 
 // Lua's answer to PZ2AutoHub_StoreSave
 engine.on('PZ2AutoHub_StoreSaved', result => {

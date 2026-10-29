@@ -1,4 +1,4 @@
-# AutoHub for Planet Zoo 2 (version 1.7.0)
+# AutoHub for Planet Zoo 2 (version 1.7.1)
 
 Finds related animals living together and moves them out (to Animal
 Storage, by Quick Trade or by Quick Release), or puts the young ones on
@@ -188,6 +188,9 @@ is still loading"; check again a few seconds later.
 - The panel follows the game's UI scale and screen size.
 
 ## Changes
+
+### 1.7.1
+- Fixed: with PZ2 Essentials or More Path Stamp Sizes installed, AutoHub's screen button and the "Mods" box in the Esc menu were missing and AutoHub did nothing. AutoHub now shares the in-park screen with them, so both work, in any install order.
 
 ### 1.7.0
 - New "Shoals per species" (Aquariums and Vivariums, 1 to 10 or No
