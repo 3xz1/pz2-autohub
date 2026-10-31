@@ -33,7 +33,7 @@ local math      = global.math
 
 local Core = module(...)
 
-Core.sVersion = "1.7.1"
+Core.sVersion = "1.7.2"
 Core.bBooted = false
 
 Core.sOverlayName = "PZ2AutoHubUI"

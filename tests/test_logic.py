@@ -77,7 +77,8 @@ A.AnimalsListType_Habitat = 11
 function A:GetAgeStatus(id) local a = animals[id]; if a.ex then error("not a habitat animal") end return a.age == "J" and 0 or 1 end
 function A:GetGender(id)
   local a = animals[id]
-  if a.ex then error("not a habitat animal") end
+  -- in the game it answers vivarium animals with the default: male (seen 2026-10-31)
+  if a.ex then return 0 end
   if a.sex == "u" then return 2 end
   return a.sex == "m" and 0 or 1
 end
@@ -314,6 +315,10 @@ lua.execute('deliverTrees(); treeDelay = false')
 lua.execute('Logic:SendFromHabitat("", "500")')
 check("vivarium: son with mother + brother/sister pair leave", sent(), [31, 33, 34])
 check("vivarium: no loading note once loaded", "still loading" in str(ui_events("PZ2AutoHub_Result")[-1][2]), False)
+# a vivarium animal's own panel (exhibitAnimalInfoPanel) checks its vivarium
+reset_sent()
+lua.execute('for _, n in ipairs({31, 33, 34}) do animals[n].ex = 500 end; Logic.tHold = {}; Logic:SendFromHabitat("", "32")')
+check("vivarium animal panel: checks its vivarium", sent(), [31, 33, 34])
 
 # 2d. Aquarium: older shoal of a species leaves, youngest stays; a split
 #     shoal linked as 'child' is NOT sent by the parent rule

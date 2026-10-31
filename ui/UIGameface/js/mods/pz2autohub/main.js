@@ -27,7 +27,7 @@ import { DataStoreCollection } from '/js/common/data/DataStoreCollection.js';
 import { loadCSS } from '/js/common/util/CSSUtil.js';
 import { addPauseMenuEntry, refreshPauseMenu } from './pausemenu.js';
 
-const VERSION = '1.7.1';
+const VERSION = '1.7.2';
 const MODE_KEY = 'PZ2AutoHub.mode';
 const OLD_AUTO_KEY = 'PZ2AutoHub.auto';
 const SIBLINGS_KEY = 'PZ2AutoHub.siblings';
@@ -650,6 +650,8 @@ function diagnose() {
         return;
     }
     listedAnimalIDs().then(ids => {
+        // a fresh log, so the report starts at the top of the box
+        logLines.length = 0;
         addLog(`UI ${VERSION}: panel context ${JSON.stringify(infoPanelContext)}; ${ids.length} listed animals`);
         addLog(`recent panels: ${panelHistory.join('  ') || 'none'}`);
         addLog(scaleInfo());
@@ -682,6 +684,9 @@ function render() {
     if (!panel || !open) return;
     const nTop = panel.scrollTop;
     const tBoxTops = Array.from(panel.querySelectorAll('.PZ2AH_box')).map(b => b.scrollTop);
+    // the log follows new lines only while it is scrolled to the end
+    const oldLog = panel.querySelector('.PZ2AH_box.log');
+    const bLogAtEnd = !oldLog || oldLog.scrollTop + oldLog.clientHeight >= oldLog.scrollHeight - 4;
     panel.textContent = '';
 
     const head = el('div', 'PZ2AH_row');
@@ -708,7 +713,7 @@ function render() {
         if (tBoxTops[i] != undefined) b.scrollTop = tBoxTops[i];
     });
     const log = panel.querySelector('.PZ2AH_box.log');
-    if (log) log.scrollTop = log.scrollHeight;
+    if (log && bLogAtEnd) log.scrollTop = log.scrollHeight;
     panel.scrollTop = nTop;
     place();
 }

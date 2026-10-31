@@ -1,4 +1,4 @@
-# AutoHub for Planet Zoo 2 (version 1.7.1)
+# AutoHub for Planet Zoo 2 (version 1.7.2)
 
 Finds related animals living together and moves them out (to Animal
 Storage, by Quick Trade or by Quick Release), or puts the young ones on
@@ -188,6 +188,11 @@ is still loading"; check again a few seconds later.
 - The panel follows the game's UI scale and screen size.
 
 ## Changes
+
+### 1.7.2
+- Fixed: every vivarium animal was read as male, so brother + sister pairs in vivariums were never found (and never got contraception). AutoHub now reads the sex the way the game's vivarium panel does.
+- Fixed: "Check the open habitat" and Diagnose with a vivarium animal's own panel open checked nothing and said "Nobody has to leave". They now check that animal's vivarium.
+- The Log keeps its place while you scroll, and Diagnose starts a fresh log.
 
 ### 1.7.1
 - Fixed: with PZ2 Essentials or More Path Stamp Sizes installed, AutoHub's screen button and the "Mods" box in the Esc menu were missing and AutoHub did nothing. AutoHub now shares the in-park screen with them, so both work, in any install order.
