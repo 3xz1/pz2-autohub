@@ -306,7 +306,7 @@ view = open_hud(lua)
 check(view.sLoaded == AUTOHUB_PAGE, f"takes over the game's HUD, got {view.sLoaded}")
 hello = events(lua, "PZ2AutoHub_Hello")
 check(len(hello) == 1, "one hello")
-check(hello and hello[0][1][:2] == ["1.7.1", "Lions"], f"hello: version and park name, got {hello}")
+check(hello and hello[0][1][:2] == ["1.7.2", "Lions"], f"hello: version and park name, got {hello}")
 check(hello and hello[0][1][2:] == ["", "ok"], f"hello: nothing kept yet, got {hello and hello[0][1][2:]}")
 want_args = {
     "PZ2AutoHub_SetAuto": 1, "PZ2AutoHub_SetSiblings": 1, "PZ2AutoHub_SetKinds": 1, "PZ2AutoHub_SetKindCfg": 1, "PZ2AutoHub_SetInterval": 1,
@@ -451,7 +451,7 @@ for order in (["Ess", "AutoHub"], ["AutoHub", "Ess"], ["Ess", "AutoHub", "Guardi
     lua.execute("sent = {}")
     view.Fire(view, "PZ2AutoHub_HelloAgain", 1)
     hello = events(lua, "PZ2AutoHub_Hello")
-    check(len(hello) == 1 and hello[0][1][:2] == ["1.7.1", "Lions"], f"{tag}: HelloAgain answers with a hello, got {hello}")
+    check(len(hello) == 1 and hello[0][1][:2] == ["1.7.2", "Lions"], f"{tag}: HelloAgain answers with a hello, got {hello}")
 
 # overlay not ready: Essentials keeps its page, AutoHub stays out of it
 lua = boot(["Ess", "AutoHub"])

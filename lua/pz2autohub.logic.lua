@@ -952,7 +952,11 @@ Logic._Gender = function(self, nID)
 	if not bOk then
 		return nil
 	end
-	local v = r[1]
+	return self:_GenderName(r[1])
+end
+
+-- A gender value as GetGender / GetAnimalUIDGender return it, by name.
+Logic._GenderName = function(self, v)
 	if type(v) == "string" then
 		local s = string.lower(v)
 		if string.find(s, "female") then
@@ -1176,20 +1180,21 @@ Logic._StageOf = function(self, nID, bExhibit)
 	return self:_Stage(nID)
 end
 
--- Exhibit animals may only answer the UID-based gender call.
+-- Vivarium animals: only the UID-based call, as the game's own vivarium
+-- panel does. animals:GetGender answers them too, but with the default
+-- (male) for every one.
 Logic._GenderOf = function(self, nID, bExhibit)
-	local sGender = self:_Gender(nID)
-	if sGender == nil and bExhibit then
-		local bUID, rUID = callAny("ExhibitAnimalEntityIDToUID", nID)
-		if bUID and rUID[1] ~= nil then
-			local bOk, r = callAny("GetAnimalUIDGender", rUID[1])
-			if bOk then
-				local tEnum = self:_ResolveGenderEnums()
-				sGender = tEnum[r[1]]
-			end
+	if not bExhibit then
+		return self:_Gender(nID)
+	end
+	local bUID, rUID = callAny("ExhibitAnimalEntityIDToUID", nID)
+	if bUID and rUID[1] ~= nil then
+		local bOk, r = callAny("GetAnimalUIDGender", rUID[1])
+		if bOk then
+			return self:_GenderName(r[1])
 		end
 	end
-	return sGender
+	return nil
 end
 
 -- Fish shoals are boids: IsSpeciesABoid(species). Shoals live in aquarium
@@ -1714,15 +1719,30 @@ Logic._PanelGroups = function(self, sIDs, sPanelID)
 	if nPanel ~= nil then
 		-- a vivarium if it is in the zoo's exhibit list (exhibit calls are
 		-- only made on IDs the game listed itself)
-		local bIsExhibit = false
+		-- or a vivarium animal's own panel: its vivarium is the one whose
+		-- animal list holds it
+		local nExhibit
 		for _, nEx in ipairs(self:_AllExhibits()) do
 			if nEx == nPanel then
-				bIsExhibit = true
+				nExhibit = nEx
 				break
 			end
 		end
-		if bIsExhibit then
-			add({ sKind = "exhibit", nID = nPanel })
+		if nExhibit == nil then
+			for _, nEx in ipairs(self:_AllExhibits()) do
+				for _, nAnimal in ipairs(self:_ExhibitAnimals(nEx)) do
+					if nAnimal == nPanel then
+						nExhibit = nEx
+						break
+					end
+				end
+				if nExhibit ~= nil then
+					break
+				end
+			end
+		end
+		if nExhibit ~= nil then
+			add({ sKind = "exhibit", nID = nExhibit })
 		else
 			add({ sKind = "habitat", nID = nPanel, bAquarium = self:_IsAquarium(nPanel) })
 		end
@@ -2375,7 +2395,7 @@ Logic._Diagnose = function(self, sIDs, sPanelID)
 		end
 		log(groupName(tGroup) .. " (" .. kindOf(tGroup) .. "): " .. #tAll .. " animals")
 		for i, f in ipairs(tAll) do
-			if i > 15 then
+			if i > 30 then
 				log("(more animals not shown)")
 				break
 			end

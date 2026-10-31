@@ -179,6 +179,7 @@
     border-radius: 0.2308em;
 }
 .PZ2AH_box.log {
+    max-height: 32em;
     white-space: pre-wrap;
     font-size: 0.9231em;
 }
